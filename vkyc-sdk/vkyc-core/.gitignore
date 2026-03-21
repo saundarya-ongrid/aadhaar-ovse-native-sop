@@ -1,0 +1,38 @@
+# OSX
+.DS_Store
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Build
+dist/
+build/
+*.d.ts
+*.js.map
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# React Native
+.expo/
+.expo-shared/
+
+# iOS
+ios/Pods/
+ios/build/
+
+# Android
+android/build/
+android/.gradle/
+android/app/build/
+
+# Misc
+*.log
+.env
+.env.local

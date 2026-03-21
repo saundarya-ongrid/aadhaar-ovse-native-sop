@@ -1,0 +1,114 @@
+plugins {
+    id 'com.android.library'
+    id 'kotlin-android'
+    id 'maven-publish'
+}
+
+android {
+    namespace 'com.vkyc.sdk'
+    compileSdk 34
+    
+    defaultConfig {
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName "1.0.0"
+        
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        consumerProguardFiles "consumer-rules.pro"
+        
+        buildConfigField "boolean", "DEBUG", "false"
+    }
+    
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            buildConfigField "boolean", "DEBUG", "true"
+        }
+    }
+    
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+    
+    buildFeatures {
+        buildConfig = true
+    }
+}
+
+dependencies {
+    // AndroidX
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    
+    // React Native
+    implementation 'com.facebook.react:react-native:+' // Use version from host app
+    implementation 'com.facebook.soloader:soloader:0.10.5'
+    
+    // Testing
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+}
+
+// Publishing configuration
+publishing {
+    publications {
+        release(MavenPublication) {
+            groupId = 'com.vkyc'
+            artifactId = 'vkyc-android-sdk'
+            version = '1.0.0'
+            
+            afterEvaluate {
+                from components.release
+            }
+            
+            pom {
+                name = 'VKYC Android SDK'
+                description = 'Native Android SDK for Video KYC verification'
+                url = 'https://github.com/your-org/vkyc-sdk'
+                
+                licenses {
+                    license {
+                        name = 'Proprietary'
+                    }
+                }
+                
+                developers {
+                    developer {
+                        id = 'vkyc-team'
+                        name = 'VKYC Team'
+                        email = 'sdk@vkyc.com'
+                    }
+                }
+            }
+        }
+    }
+    
+    repositories {
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/your-org/vkyc-sdk")
+            credentials {
+                username = project.findProperty("gpr.user") ?: System.getenv("GITHUB_USERNAME")
+                password = project.findProperty("gpr.token") ?: System.getenv("GITHUB_TOKEN")
+            }
+        }
+    }
+}
+
+// Task to generate AAR
+task generateAAR {
+    dependsOn 'assembleRelease'
+    doLast {
+        println "AAR generated at: build/outputs/aar/"
+    }
+}

@@ -1,4 +1,5 @@
 import { LinearGradient } from "expo-linear-gradient";
+import { router } from "expo-router";
 import React, { useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -30,7 +31,7 @@ export default function HomeScreen() {
    };
 
    const handleNativePress = () => {
-      setSelectedMode("native");
+      router.push("/ovse-test" as any);
    };
 
    const handleGoPress = () => {
@@ -118,7 +119,7 @@ export default function HomeScreen() {
                         >
                            <Text style={styles.buttonIcon}>📱</Text>
                            <Text style={styles.buttonTitle}>Native</Text>
-                           <Text style={styles.buttonDescription}>Coming soon...</Text>
+                           <Text style={styles.buttonDescription}>Test OVSE Flow</Text>
                         </LinearGradient>
                      </TouchableOpacity>
                   </View>
