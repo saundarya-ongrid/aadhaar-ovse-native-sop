@@ -1,16 +1,37 @@
 /**
  * OVSE Test Screen
- * Simple test harness for the OVSE flow
+ * Simple test harness for the OVSE flow with new API contracts
+ *
+ * IMPORTANT: App Package ID and Signature
+ * ========================================
+ *
+ * Android:
+ * - app_package_id: Get from android/app/build.gradle -> applicationId (e.g., "com.yourcompany.app")
+ * - app_signature: SHA-256 certificate fingerprint
+ *   Get via: cd android && ./gradlew signingReport
+ *   Look for: SHA-256: AA:BB:CC:DD:EE:FF:... (64 hex characters)
+ *
+ * iOS:
+ * - app_package_id: Get from Info.plist -> CFBundleIdentifier (e.g., "com.yourcompany.app")
+ * - app_signature: Team ID from Apple Developer account (e.g., "ABC123XYZ4")
+ *   Get via: Xcode -> Project -> Signing & Capabilities -> Team ID
+ *   Or leave as placeholder if UIDAI doesn't strictly validate iOS signatures
+ *
+ * Update OVSEAPIService.getAppIdentifiers() method below with your actual values
  */
 
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
    ActivityIndicator,
    Alert,
+   AppState,
+   Image,
    KeyboardAvoidingView,
    Linking,
+   Modal,
+   NativeModules,
    Platform,
    ScrollView,
    StatusBar,
@@ -22,9 +43,22 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-// Mock API Service for testing
+const { OvseModule } = NativeModules;
+
+// Storage key for runtime persistence
+const OVSE_RUNTIME_KEY = "ovse:runtime";
+
+// Runtime persistence interface
+interface OVSERuntime {
+   apiKey: string;
+   transactionId: string;
+   expiresAt: number;
+   scanUri: string; // For launching Aadhaar app
+}
+
+// API Service for OVSE Integration
 class OVSEAPIService {
-   private static BASE_URL = "https://d29vza544ghj85.cloudfront.net/api/integration";
+   private static BASE_URL = "https://api-dev.gridlines.io/uidai-api/ovse";
 
    private static async parseResponse(response: Response) {
       const text = await response.text();
@@ -39,198 +73,371 @@ class OVSEAPIService {
       }
    }
 
-   static async initiateSession(token: string) {
-      const response = await fetch(`${this.BASE_URL}/initiate/session`, {
-         method: "POST",
-         headers: { "Content-Type": "application/json" },
-         body: JSON.stringify({ token }),
-      });
-      return this.parseResponse(response);
+   /**
+    * Get app package ID and signature
+    * For Android: package name and SHA-256 certificate fingerprint
+    * For iOS: bundle identifier and Team ID (or leave empty as not required by UIDAI)
+    */
+   private static getAppIdentifiers() {
+      if (Platform.OS === "android") {
+         // Android: Package name and SHA-256 certificate fingerprint
+         // Package set in app.json: "in.ongrid.lav"
+         // SHA-256 from debug keystore
+         return {
+            app_package_id: "in.ongrid.lav", // Registered with UIDAI
+            app_signature:
+               "B7:AA:EF:85:9B:8A:77:15:10:D2:43:63:39:E4:75:07:4E:AA:77:D1:2E:A6:6A:47:B7:FE:08:7E:5C:24:C4:3C", // SHA-256 debug keystore
+         };
+      } else {
+         // iOS: MUST match actual Bundle ID in Xcode
+         // Set in Xcode: Target → General → Bundle Identifier = in.ongrid.lav
+         return {
+            app_package_id: "in.ongrid.lav", // Registered with UIDAI
+            app_signature: "DZ54P8HK5D", // Team ID
+         };
+      }
    }
 
-   static async setKYCMethod(sessionId: string, authorization: string, method: string = "aadhaarovse") {
-      const response = await fetch(`${this.BASE_URL}/customer/kyc/method`, {
+   /**
+    * NEW: Generate Token for App-to-App flow
+    * POST /ovse/generate-token
+    * Channel: APP (for mobile app-to-app), WEB (for browser redirect)
+    */
+   static async generateToken(apiKey: string, channelType: "APP" | "WEB" = "APP") {
+      const { app_package_id, app_signature } = this.getAppIdentifiers();
+
+      const body: any = {
+         channel_type: channelType,
+         template_id: "1",
+         expiry_time_in_seconds: 3600,
+         consent: "Y",
+      };
+
+      // Add app identifiers only for APP channel
+      if (channelType === "APP") {
+         body.app_package_id = app_package_id;
+         body.app_signature = app_signature;
+      }
+
+      const response = await fetch(`${this.BASE_URL}/generate-token`, {
          method: "POST",
          headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${authorization}`,
+            Accept: "application/json",
+            "X-API-Key": apiKey,
+            "X-Auth-Type": "Api-Key",
+            "X-GLN-Source": "API",
          },
-         body: JSON.stringify({ sessionId, method }),
+         body: JSON.stringify(body),
       });
       return this.parseResponse(response);
    }
 
-   static async generateIntent(customerSessionId: string, authorization: string, channel: string = "WEB") {
-      const response = await fetch(`${this.BASE_URL}/ovse/generate-intent`, {
+   /**
+    * NEW: Generate QR Code
+    * POST /ovse/generate-qr
+    * For desktop/web QR code based verification
+    */
+   static async generateQR(apiKey: string) {
+      const response = await fetch(`${this.BASE_URL}/generate-qr`, {
          method: "POST",
          headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${authorization}`,
-         },
-         body: JSON.stringify({ customer_session_id: customerSessionId, channel }),
-      });
-      return this.parseResponse(response);
-   }
-
-   static async checkStatus(customerSessionId: string, transactionId: string, authorization: string) {
-      const response = await fetch(`${this.BASE_URL}/ovse/status`, {
-         method: "POST",
-         headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${authorization}`,
+            Accept: "application/json",
+            "X-API-Key": apiKey,
+            "X-Auth-Type": "Api-Key",
+            "X-GLN-Source": "API",
          },
          body: JSON.stringify({
-            customer_session_id: customerSessionId,
-            transaction_id: transactionId,
+            template_id: "1",
+            expiry_time_in_seconds: 3600,
+            consent: "Y",
          }),
+      });
+      return this.parseResponse(response);
+   }
+
+   /**
+    * NEW: Check Status (GET with transaction ID in header)
+    * GET /ovse/status
+    * X-Transaction-ID: {transaction_id}
+    */
+   static async checkStatus(apiKey: string, transactionId: string) {
+      const response = await fetch(`${this.BASE_URL}/status`, {
+         method: "GET",
+         headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "X-API-Key": apiKey,
+            "X-Auth-Type": "Api-Key",
+            "X-GLN-Source": "API",
+            "X-Transaction-ID": transactionId,
+         },
       });
       return this.parseResponse(response);
    }
 }
 
 export default function OVSETestScreen() {
-   const [token, setToken] = useState("");
+   const [apiKey, setApiKey] = useState("WtTd78f6ALkaRIsy1e0nI2YMnC2im0MX");
    const [isLoading, setIsLoading] = useState(false);
    const [status, setStatus] = useState("");
    const [sessionData, setSessionData] = useState<any>(null);
    const [pollingActive, setPollingActive] = useState(false);
    const [pollCount, setPollCount] = useState(0);
+   const [ovseResult, setOvseResult] = useState<any>(null);
+   const [showResultModal, setShowResultModal] = useState(false);
+
+   // Refs for polling control
+   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+   const appStateRef = useRef(AppState.currentState);
 
    const handleBack = () => {
+      // Clean up polling on exit
+      if (pollIntervalRef.current) {
+         clearInterval(pollIntervalRef.current);
+      }
       router.back();
    };
 
+   // Save runtime to storage (disabled - AsyncStorage removed)
+   const saveRuntime = async (runtime: OVSERuntime) => {
+      // No-op: AsyncStorage was causing build issues
+      console.log("ℹ️ Runtime persistence disabled");
+   };
+
+   // Load runtime from storage (disabled - AsyncStorage removed)
+   const loadRuntime = async (): Promise<OVSERuntime | null> => {
+      // No-op: AsyncStorage was causing build issues
+      return null;
+   };
+
+   // Clear runtime from storage (disabled - AsyncStorage removed)
+   const clearRuntime = async () => {
+      // No-op: AsyncStorage was causing build issues
+      console.log("ℹ️ Runtime persistence disabled");
+   };
+
+   // Stop polling
+   const stopPolling = () => {
+      if (pollIntervalRef.current) {
+         clearInterval(pollIntervalRef.current);
+         pollIntervalRef.current = null;
+      }
+      setPollingActive(false);
+   };
+
+   // Handle app state changes (when returning from Aadhaar app)
+   useEffect(() => {
+      const subscription = AppState.addEventListener("change", async (nextAppState) => {
+         console.log("AppState changed:", appStateRef.current, "->", nextAppState);
+
+         // User returned to app from background
+         if (appStateRef.current.match(/inactive|background/) && nextAppState === "active") {
+            console.log("📱 App came to foreground - checking for active runtime");
+
+            // Try to restore runtime and continue polling
+            const runtime = await loadRuntime();
+            if (runtime && !pollingActive) {
+               console.log("🔄 Resuming polling after return from Aadhaar app");
+               setSessionData({
+                  apiKey: runtime.apiKey,
+                  transactionId: runtime.transactionId,
+                  scanUri: runtime.scanUri,
+               });
+               setStatus("Returned from Aadhaar app - checking status...");
+
+               // Immediately poll once, then start regular polling
+               pollOnce(runtime.apiKey, runtime.transactionId);
+               startPolling(runtime.apiKey, runtime.transactionId);
+            }
+         }
+
+         appStateRef.current = nextAppState;
+      });
+
+      return () => {
+         subscription.remove();
+      };
+   }, [pollingActive]);
+
+   // Cleanup on unmount
+   useEffect(() => {
+      return () => {
+         stopPolling();
+      };
+   }, []);
+
+   // Try to restore runtime on mount
+   useEffect(() => {
+      const restoreOnMount = async () => {
+         const runtime = await loadRuntime();
+         if (runtime) {
+            console.log("🔄 Restoring saved runtime on mount");
+            setSessionData({
+               apiKey: runtime.apiKey,
+               transactionId: runtime.transactionId,
+               scanUri: runtime.scanUri,
+            });
+            setStatus("Restored active session - polling...");
+            startPolling(runtime.apiKey, runtime.transactionId);
+         }
+      };
+
+      restoreOnMount();
+   }, []);
+
    const handleSubmit = async () => {
-      if (!token.trim()) {
-         Alert.alert("Error", "Please enter a token");
+      if (!apiKey.trim()) {
+         Alert.alert("Error", "Please enter an API Key");
          return;
       }
 
       setIsLoading(true);
-      setStatus("Initiating session...");
+      setStatus("Generating intent for app-to-app flow...");
 
       try {
-         // Step 1: Initiate session
-         const sessionResponse = await OVSEAPIService.initiateSession(token);
-         console.log("Session Response:", sessionResponse);
+         // Single API call to generate token for APP channel
+         const tokenResponse = await OVSEAPIService.generateToken(apiKey, "APP");
+         console.log("Token Response:", tokenResponse);
 
-         if (
-            sessionResponse.status !== "success" ||
-            !sessionResponse.data?.sessionId ||
-            !sessionResponse.data?.authorization
-         ) {
-            throw new Error(sessionResponse.message || "Failed to initiate session");
+         // Check response structure
+         if (tokenResponse?.status !== 200 || !tokenResponse?.data) {
+            throw new Error(tokenResponse?.data?.message || "Failed to generate token");
          }
 
-         const sessionId = sessionResponse.data.sessionId;
-         const authToken = sessionResponse.data.authorization;
-         console.log("Authorization token received:", authToken.substring(0, 50) + "...");
-         setStatus(`Session created: ${sessionId}`);
-         await new Promise((resolve) => setTimeout(resolve, 500));
+         // API can return either scan_uri or jwt_token depending on implementation
+         const { transaction_id, scan_uri, jwt_token, expires_at } = tokenResponse.data;
 
-         // Step 2: Set KYC method
-         setStatus("Setting KYC method...");
-         console.log("Calling KYC method with sessionId:", sessionId);
-         const kycResponse = await OVSEAPIService.setKYCMethod(sessionId, authToken, "aadhaarovse");
-         console.log("KYC Response:", kycResponse);
+         // Use jwt_token if scan_uri is not present
+         const intentToken = scan_uri || jwt_token;
 
-         if (kycResponse.status !== "success") {
-            throw new Error(kycResponse.message || "Failed to set KYC method");
+         if (!transaction_id || !intentToken) {
+            throw new Error(
+               `Invalid response: missing transaction_id or token. Got: ${JSON.stringify(tokenResponse.data)}`,
+            );
          }
 
-         setStatus(`KYC method set successfully`);
-         await new Promise((resolve) => setTimeout(resolve, 500));
+         // Decode JWT to verify backend configuration
+         console.log("\n=== JWT VERIFICATION ===");
+         try {
+            const jwtParts = intentToken.split(".");
+            if (jwtParts.length === 3) {
+               // Decode Base64URL payload
+               const base64Url = jwtParts[1];
+               const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+               const payload = JSON.parse(
+                  decodeURIComponent(
+                     atob(base64)
+                        .split("")
+                        .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
+                        .join(""),
+                  ),
+               );
 
-         // Step 3: Generate intent
-         setStatus("Generating intent...");
-         const intentResponse = await OVSEAPIService.generateIntent(sessionId, authToken, "WEB");
-         console.log("Intent Response:", intentResponse);
+               console.log("JWT Payload:", JSON.stringify(payload, null, 2));
+               console.log("\n=== CRITICAL FIELDS ===");
+               console.log("aid (app_package_id):", payload.aid);
+               console.log("asig (app_signature):", payload.asig);
+               console.log("ac (OVSE Client ID):", payload.ac);
+               console.log("sa (Registration Number):", payload.sa);
+               console.log("ch (channel):", payload.ch);
+               console.log("cb (callback URL):", payload.cb);
+               console.log("aud (audience):", payload.aud);
 
-         if (
-            intentResponse.status !== "success" ||
-            !intentResponse.data?.transaction_id ||
-            !intentResponse.data?.jwt_token
-         ) {
-            throw new Error(intentResponse.message || "Failed to generate intent");
+               // Check if Bundle ID matches what we're sending
+               if (payload.aid && payload.aid !== "in.ongrid.lav") {
+                  console.log("⚠️ WARNING: Bundle ID mismatch!");
+                  console.log("  JWT aid:", payload.aid);
+                  console.log("  Expected: in.ongrid.lav");
+                  Alert.alert(
+                     "❌ Bundle ID Mismatch",
+                     `The app is sending Bundle ID:\n"${payload.aid}"\n\nBut you changed Xcode to:\n"in.ongrid.lav"\n\nYou need to:\n1. Clean Build (Product → Clean)\n2. Delete app from iPhone\n3. Rebuild and reinstall`,
+                  );
+               }
+
+               console.log("========================\n");
+            }
+         } catch (error) {
+            console.error("Failed to decode JWT:", error);
          }
 
-         const transactionId = intentResponse.data.transaction_id;
-         const jwtToken = intentResponse.data.jwt_token;
-
-         setStatus("JWT generated! Launching Aadhaar app...");
+         setStatus("Token generated! Launching Aadhaar app...");
          setSessionData({
-            sessionId,
-            customerSessionId: sessionId,
-            transactionId,
-            jwt: jwtToken,
-            authToken,
+            apiKey,
+            transactionId: transaction_id,
+            scanUri: intentToken,
          });
 
-         // Launch Aadhaar app with JWT token
+         // Save runtime for app state restoration
+         await saveRuntime({
+            apiKey,
+            transactionId: transaction_id,
+            expiresAt: expires_at || Date.now() + 3600 * 1000,
+            scanUri: intentToken,
+         });
+
+         // Launch Aadhaar app with intent token
          console.log("Launching Aadhaar app on", Platform.OS);
-         console.log("JWT Token length:", jwtToken.length);
-         console.log("JWT Token first 50 chars:", jwtToken.substring(0, 50));
+         console.log("Intent token length:", intentToken.length);
 
          try {
             if (Platform.OS === "ios") {
-               // iOS: App to App URL scheme launch
-               // Trying multiple possible URL schemes for mAadhaar app
+               // iOS: Use verified working scheme - pehchaan:// (with double 'a')
+               // The token might be a JWT or a URL, handle both cases
+               let aadhaarUrl = intentToken;
 
-               const urlVariations = [
-                  `pehchan://in.gov.uidai.pehchan?req=${jwtToken}`, // From docs
-                  `pehchaan://in.gov.uidai.pehchaan?req=${jwtToken}`, // Double 'a' variation
-                  `maadhaar://in.gov.uidai.pehchan?req=${jwtToken}`, // mAadhaar scheme
-                  `aadhaar://in.gov.uidai.pehchan?req=${jwtToken}`, // Aadhaar scheme
-                  `pehchan://?req=${jwtToken}`, // Simplified
-                  `in.gov.uidai.mAadhaar://?req=${jwtToken}`, // Bundle ID based
-               ];
-
-               console.log("\n=== iOS App Launch Attempt ===");
-               console.log("JWT length:", jwtToken.length);
-               console.log("Trying", urlVariations.length, "different URL schemes...\n");
-
-               let launched = false;
-
-               for (let i = 0; i < urlVariations.length; i++) {
-                  const url = urlVariations[i];
-                  const schemeName = url.split("://")[0];
-
-                  try {
-                     console.log(`${i + 1}/${urlVariations.length} Trying: ${schemeName}://...`);
-                     await Linking.openURL(url);
-                     launched = true;
-                     console.log(`✅ SUCCESS! Aadhaar app launched with scheme: ${schemeName}://`);
-                     setStatus(`Aadhaar app launched via ${schemeName}://`);
-                     break;
-                  } catch (err: any) {
-                     console.log(`❌ Failed with ${schemeName}://`);
+               // If it's a web URL, extract the token parameter
+               if (intentToken.includes("maadhaar.com") || intentToken.includes("http")) {
+                  // Extract token from URL parameter
+                  const urlParams = new URL(intentToken).searchParams;
+                  const token = urlParams.get("value") || urlParams.get("req");
+                  if (token) {
+                     aadhaarUrl = `pehchaan://in.gov.uidai.pehchaan?req=${token}`;
                   }
+               } else {
+                  // It's a raw JWT token, build the URL
+                  aadhaarUrl = `pehchaan://in.gov.uidai.pehchaan?req=${intentToken}`;
                }
 
-               if (!launched) {
-                  console.log("\n❌ All URL schemes failed");
-                  console.log(
-                     "The mAadhaar app may not be installed or doesn't support app-to-app on this iOS version.",
-                  );
-                  throw new Error("Cannot launch Aadhaar app. All URL schemes failed.");
-               }
+               console.log("\n=== iOS App Launch ===");
+               console.log("Using URL:", aadhaarUrl.substring(0, 100) + "...");
 
-               if (launched) {
-                  // Start polling after a 2-second delay
-                  setTimeout(() => {
-                     startPolling(sessionId, transactionId, authToken);
-                  }, 2000);
-               }
+               await Linking.openURL(aadhaarUrl);
+               console.log("✅ Aadhaar app launched successfully");
+               setStatus("Aadhaar app launched. Complete verification there...");
+
+               // Start polling IMMEDIATELY (no delay)
+               startPolling(apiKey, transaction_id);
             } else {
-               // Android: Use Intent with action
-               console.log("Android Intent with JWT (length:", jwtToken.length, ")");
-               await Linking.sendIntent("in.gov.uidai.pehchaan.INTENT_REQUEST", [{ key: "request", value: jwtToken }]);
-               setStatus("Aadhaar app launched. Complete authentication there...");
+               // Android: Use official UIDAI Intent as per documentation
+               // val intent = Intent("in.gov.uidai.pehchaan.INTENT_REQUEST").apply {
+               //     putExtra("request", jwt)
+               // }
+               console.log("Android Intent with token (length:", intentToken.length, ")");
 
-               // Start polling after a 2-second delay
-               setTimeout(() => {
-                  startPolling(sessionId, transactionId, authToken);
-               }, 2000);
+               // Extract token if it's a web URL, otherwise use as-is
+               let androidToken = intentToken;
+               if (intentToken.includes("maadhaar.com") || intentToken.includes("http")) {
+                  const urlParams = new URL(intentToken).searchParams;
+                  androidToken = urlParams.get("value") || urlParams.get("req") || intentToken;
+               }
+
+               try {
+                  console.log("Launching Aadhaar app via native module with token length:", androidToken.length);
+
+                  // Use native module to launch with proper Intent.putExtra()
+                  await OvseModule.launchAadhaarApp(androidToken);
+
+                  console.log(`✅ Aadhaar app launched successfully`);
+                  setStatus("Aadhaar app launched. Complete verification there...");
+               } catch (err: any) {
+                  console.log(`Failed to launch:`, err);
+                  throw new Error(err.message || "Unable to launch Aadhaar app");
+               }
+
+               // Start polling IMMEDIATELY (no delay)
+               startPolling(apiKey, transaction_id);
             }
          } catch (error: any) {
             console.error("Failed to launch Aadhaar app:", error);
@@ -242,7 +449,7 @@ export default function OVSETestScreen() {
                [
                   {
                      text: "Start Polling",
-                     onPress: () => startPolling(sessionId, transactionId, authToken),
+                     onPress: () => startPolling(apiKey, transaction_id),
                   },
                   { text: "Cancel", style: "cancel" },
                ],
@@ -253,59 +460,85 @@ export default function OVSETestScreen() {
          const errorMsg = error.message || error.toString() || "Failed to complete OVSE flow";
          Alert.alert("Error", errorMsg);
          setStatus(`Error: ${errorMsg}`);
+         await clearRuntime();
       } finally {
          setIsLoading(false);
       }
    };
 
-   const startPolling = async (customerSessionId: string, transactionId: string, authToken: string) => {
+   // Poll once immediately
+   const pollOnce = async (apiKey: string, transactionId: string) => {
+      try {
+         const statusResponse = await OVSEAPIService.checkStatus(apiKey, transactionId);
+         console.log("Immediate poll result:", statusResponse);
+
+         // New API returns code 1001 for callback received
+         if (statusResponse?.data?.code === "1001" || statusResponse?.data?.code === 1001) {
+            stopPolling();
+            await clearRuntime();
+            setStatus(`✅ Verification Complete!`);
+            setOvseResult(statusResponse.data.ovse_data);
+            setShowResultModal(true);
+         } else {
+            setStatus(`Status: ${statusResponse?.data?.message || "Waiting for verification..."}`);
+         }
+      } catch (error: any) {
+         console.error("Poll error:", error);
+      }
+   };
+
+   const startPolling = async (apiKey: string, transactionId: string) => {
+      // Clear any existing polling interval
+      stopPolling();
+
       setPollingActive(true);
       setPollCount(0);
       setStatus("Polling for status...");
 
       let attempts = 0;
-      const maxAttempts = 60;
+      const maxAttempts = 60; // 5 minutes at 5-second intervals
 
-      const pollInterval = setInterval(async () => {
+      pollIntervalRef.current = setInterval(async () => {
          attempts++;
          setPollCount(attempts);
 
          try {
-            const statusResponse = await OVSEAPIService.checkStatus(customerSessionId, transactionId, authToken);
+            const statusResponse = await OVSEAPIService.checkStatus(apiKey, transactionId);
             console.log(`Poll ${attempts}/${maxAttempts}:`, statusResponse);
 
-            if (statusResponse.code !== "CALLBACK_NOT_YET_RECEIVED") {
-               clearInterval(pollInterval);
-               setPollingActive(false);
-               setStatus(`Complete! Status: ${statusResponse.code}`);
-
-               Alert.alert(
-                  "Verification Complete",
-                  `Status: ${statusResponse.code}\nMessage: ${statusResponse.message}`,
-                  [{ text: "OK", onPress: () => console.log("Result:", statusResponse) }],
-               );
+            // Check for callback received (code 1001)
+            if (statusResponse?.data?.code === "1001" || statusResponse?.data?.code === 1001) {
+               stopPolling();
+               await clearRuntime();
+               setStatus(`✅ Verification Complete!`);
+               setOvseResult(statusResponse.data.ovse_data);
+               setShowResultModal(true);
             } else {
-               setStatus(`Polling (${attempts}/${maxAttempts})... Status: ${statusResponse.code}`);
+               // Still waiting (code 1000 or other)
+               setStatus(`Polling (${attempts}/${maxAttempts})... ${statusResponse.data?.message || "Waiting..."}`);
             }
          } catch (error: any) {
             console.error(`Poll ${attempts} error:`, error);
          }
 
          if (attempts >= maxAttempts) {
-            clearInterval(pollInterval);
-            setPollingActive(false);
+            stopPolling();
+            await clearRuntime();
             setStatus("Polling timeout after 5 minutes");
             Alert.alert("Timeout", "Verification did not complete within 5 minutes");
          }
       }, 5000);
    };
 
-   const handleClearState = () => {
-      setToken("");
+   const handleClearState = async () => {
+      stopPolling();
+      await clearRuntime();
+      setApiKey("");
       setStatus("");
       setSessionData(null);
-      setPollingActive(false);
       setPollCount(0);
+      setOvseResult(null);
+      setShowResultModal(false);
    };
 
    return (
@@ -333,20 +566,22 @@ export default function OVSETestScreen() {
                   {/* Info Card */}
                   <View style={styles.infoCard}>
                      <Text style={styles.infoTitle}>🧪 Test Environment</Text>
-                     <Text style={styles.infoText}>API: d29vza544ghj85.cloudfront.net</Text>
+                     <Text style={styles.infoText}>API: api-dev.gridlines.io/uidai-api/ovse</Text>
+                     <Text style={styles.infoText}>Channel: APP (app-to-app)</Text>
                      <Text style={styles.infoText}>Polling: 5s interval, 60 max attempts</Text>
                   </View>
 
-                  {/* Token Input */}
+                  {/* API Key Input */}
                   <View style={styles.inputCard}>
-                     <Text style={styles.label}>Enter Token</Text>
+                     <Text style={styles.label}>Enter API Key</Text>
                      <TextInput
                         style={styles.input}
-                        value={token}
-                        onChangeText={setToken}
-                        placeholder="e.g., DPYmAX"
+                        value={apiKey}
+                        onChangeText={setApiKey}
+                        placeholder="X-API-Key"
                         placeholderTextColor="rgba(255, 255, 255, 0.5)"
-                        autoCapitalize="characters"
+                        autoCapitalize="none"
+                        secureTextEntry={true}
                         editable={!isLoading && !pollingActive}
                      />
                   </View>
@@ -383,32 +618,150 @@ export default function OVSETestScreen() {
                   {sessionData && (
                      <View style={styles.dataCard}>
                         <Text style={styles.dataTitle}>Session Data</Text>
-                        <Text style={styles.dataLabel}>Session ID:</Text>
-                        <Text style={styles.dataValue}>{sessionData.sessionId}</Text>
-                        <Text style={styles.dataLabel}>Customer Session ID:</Text>
-                        <Text style={styles.dataValue}>{sessionData.customerSessionId}</Text>
                         <Text style={styles.dataLabel}>Transaction ID:</Text>
                         <Text style={styles.dataValue}>{sessionData.transactionId}</Text>
-                        <Text style={styles.dataLabel}>JWT (first 50 chars):</Text>
-                        <Text style={styles.dataValue}>{sessionData.jwt?.substring(0, 50)}...</Text>
+                        <Text style={styles.dataLabel}>Scan URI (first 80 chars):</Text>
+                        <Text style={styles.dataValue}>{sessionData.scanUri?.substring(0, 80)}...</Text>
                      </View>
                   )}
 
                   {/* Instructions */}
                   <View style={styles.instructionsCard}>
                      <Text style={styles.instructionsTitle}>📋 Instructions</Text>
-                     <Text style={styles.instructionsText}>1. Enter a valid token from backend</Text>
+                     <Text style={styles.instructionsText}>1. Enter your X-API-Key from backend</Text>
                      <Text style={styles.instructionsText}>2. Tap "Start OVSE Flow"</Text>
-                     <Text style={styles.instructionsText}>3. Wait for intent generation</Text>
-                     <Text style={styles.instructionsText}>4. Start polling for status</Text>
-                     <Text style={styles.instructionsText}>5. Complete auth in Aadhaar app</Text>
+                     <Text style={styles.instructionsText}>3. App generates intent (APP channel)</Text>
+                     <Text style={styles.instructionsText}>4. Aadhaar app launches automatically</Text>
+                     <Text style={styles.instructionsText}>5. Complete biometric in Aadhaar app</Text>
+                     <Text style={styles.instructionsText}>6. Return to see verification result</Text>
                   </View>
                </ScrollView>
             </KeyboardAvoidingView>
          </SafeAreaView>
+
+         {/* OVSE Result Modal */}
+         <Modal
+            visible={showResultModal}
+            animationType="slide"
+            transparent={true}
+            onRequestClose={() => setShowResultModal(false)}
+         >
+            <View style={styles.modalOverlay}>
+               <View style={styles.modalContainer}>
+                  <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
+                     {/* Header */}
+                     <View style={styles.modalHeader}>
+                        <Text style={styles.modalTitle}>✅ Verification Successful</Text>
+                        <TouchableOpacity onPress={() => setShowResultModal(false)} style={styles.closeButton}>
+                           <Text style={styles.closeButtonText}>✕</Text>
+                        </TouchableOpacity>
+                     </View>
+
+                     {ovseResult && (
+                        <>
+                           {/* Resident Photo */}
+                           {ovseResult.resident_image && (
+                              <View style={styles.photoContainer}>
+                                 <Image
+                                    source={{ uri: `data:image/jpeg;base64,${ovseResult.resident_image}` }}
+                                    style={styles.residentPhoto}
+                                    resizeMode="cover"
+                                 />
+                              </View>
+                           )}
+
+                           {/* Personal Details */}
+                           <View style={styles.resultSection}>
+                              <Text style={styles.sectionTitle}>Personal Information</Text>
+                              <ResultRow label="Name" value={ovseResult.resident_name} />
+                              {ovseResult.local_resident_name && (
+                                 <ResultRow label="Local Name" value={ovseResult.local_resident_name} />
+                              )}
+                              <ResultRow label="Date of Birth" value={ovseResult.dob} />
+                              <ResultRow label="Gender" value={ovseResult.gender} />
+                              <ResultRow label="Care Of" value={ovseResult.care_of} />
+                           </View>
+
+                           {/* Contact Details */}
+                           <View style={styles.resultSection}>
+                              <Text style={styles.sectionTitle}>Contact Information</Text>
+                              <ResultRow label="Mobile" value={ovseResult.masked_mobile || ovseResult.mobile} />
+                              <ResultRow label="Email" value={ovseResult.masked_email || ovseResult.email} />
+                           </View>
+
+                           {/* Address Details */}
+                           <View style={styles.resultSection}>
+                              <Text style={styles.sectionTitle}>Address</Text>
+                              <ResultRow label="Full Address" value={ovseResult.address} multiline />
+                              {ovseResult.building && ovseResult.building !== "N/A" && (
+                                 <ResultRow label="Building" value={ovseResult.building} />
+                              )}
+                              {ovseResult.street && ovseResult.street !== "N/A" && (
+                                 <ResultRow label="Street" value={ovseResult.street} />
+                              )}
+                              {ovseResult.locality && ovseResult.locality !== "N/A" && (
+                                 <ResultRow label="Locality" value={ovseResult.locality} />
+                              )}
+                              {ovseResult.landmark && ovseResult.landmark !== "N/A" && (
+                                 <ResultRow label="Landmark" value={ovseResult.landmark} />
+                              )}
+                              {ovseResult.vtc && <ResultRow label="VTC" value={ovseResult.vtc} />}
+                              {ovseResult.sub_district && (
+                                 <ResultRow label="Sub District" value={ovseResult.sub_district} />
+                              )}
+                              <ResultRow label="District" value={ovseResult.district} />
+                              <ResultRow label="State" value={ovseResult.state} />
+                              <ResultRow label="Pincode" value={ovseResult.pincode} />
+                              {ovseResult.po_name && ovseResult.po_name !== "N/A" && (
+                                 <ResultRow label="Post Office" value={ovseResult.po_name} />
+                              )}
+                           </View>
+
+                           {/* Age Verification */}
+                           <View style={styles.resultSection}>
+                              <Text style={styles.sectionTitle}>Age Verification</Text>
+                              {ovseResult.age_above18 && <ResultRow label="Above 18" value={ovseResult.age_above18} />}
+                              {ovseResult.age_above50 && <ResultRow label="Above 50" value={ovseResult.age_above50} />}
+                              {ovseResult.age_above60 && <ResultRow label="Above 60" value={ovseResult.age_above60} />}
+                              {ovseResult.age_above75 && <ResultRow label="Above 75" value={ovseResult.age_above75} />}
+                              {ovseResult.is_nri && <ResultRow label="NRI Status" value={ovseResult.is_nri} />}
+                           </View>
+
+                           {/* Enrollment Details */}
+                           <View style={styles.resultSection}>
+                              <Text style={styles.sectionTitle}>Aadhaar Information</Text>
+                              <ResultRow label="Enrolment Number" value={ovseResult.enrolment_number} />
+                              <ResultRow
+                                 label="Enrolment Date"
+                                 value={new Date(ovseResult.enrolment_date).toLocaleString()}
+                              />
+                              <ResultRow
+                                 label="Credential Issue Date"
+                                 value={new Date(ovseResult.credential_issuing_date).toLocaleString()}
+                              />
+                           </View>
+                        </>
+                     )}
+
+                     {/* Close Button */}
+                     <TouchableOpacity style={styles.doneButton} onPress={() => setShowResultModal(false)}>
+                        <Text style={styles.doneButtonText}>Done</Text>
+                     </TouchableOpacity>
+                  </ScrollView>
+               </View>
+            </View>
+         </Modal>
       </LinearGradient>
    );
 }
+
+// Helper component for displaying result rows
+const ResultRow = ({ label, value, multiline = false }: { label: string; value: string; multiline?: boolean }) => (
+   <View style={styles.resultRow}>
+      <Text style={styles.resultLabel}>{label}:</Text>
+      <Text style={[styles.resultValue, multiline && styles.resultValueMultiline]}>{value || "N/A"}</Text>
+   </View>
+);
 
 const styles = StyleSheet.create({
    container: {
@@ -576,5 +929,114 @@ const styles = StyleSheet.create({
       color: "rgba(255, 255, 255, 0.9)",
       fontSize: 14,
       marginBottom: 4,
+   },
+   // Modal styles
+   modalOverlay: {
+      flex: 1,
+      backgroundColor: "rgba(0, 0, 0, 0.7)",
+      justifyContent: "center",
+      alignItems: "center",
+   },
+   modalContainer: {
+      width: "90%",
+      maxHeight: "85%",
+      backgroundColor: "#ffffff",
+      borderRadius: 20,
+      overflow: "hidden",
+      elevation: 10,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 10 },
+      shadowOpacity: 0.3,
+      shadowRadius: 20,
+   },
+   modalScroll: {
+      flex: 1,
+   },
+   modalHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      padding: 20,
+      backgroundColor: "#4facfe",
+   },
+   modalTitle: {
+      color: "#fff",
+      fontSize: 20,
+      fontWeight: "bold",
+      flex: 1,
+   },
+   closeButton: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      backgroundColor: "rgba(255, 255, 255, 0.3)",
+      justifyContent: "center",
+      alignItems: "center",
+   },
+   closeButtonText: {
+      color: "#fff",
+      fontSize: 20,
+      fontWeight: "bold",
+   },
+   photoContainer: {
+      alignItems: "center",
+      padding: 20,
+      backgroundColor: "#f8f9fa",
+   },
+   residentPhoto: {
+      width: 120,
+      height: 150,
+      borderRadius: 8,
+      borderWidth: 3,
+      borderColor: "#4facfe",
+   },
+   resultSection: {
+      padding: 16,
+      borderBottomWidth: 1,
+      borderBottomColor: "#e9ecef",
+   },
+   sectionTitle: {
+      fontSize: 18,
+      fontWeight: "bold",
+      color: "#495057",
+      marginBottom: 12,
+   },
+   resultRow: {
+      flexDirection: "row",
+      paddingVertical: 8,
+      borderBottomWidth: 1,
+      borderBottomColor: "#f1f3f5",
+   },
+   resultLabel: {
+      fontSize: 14,
+      fontWeight: "600",
+      color: "#6c757d",
+      width: 140,
+   },
+   resultValue: {
+      flex: 1,
+      fontSize: 14,
+      color: "#212529",
+      fontWeight: "500",
+   },
+   resultValueMultiline: {
+      lineHeight: 20,
+   },
+   doneButton: {
+      margin: 20,
+      backgroundColor: "#4facfe",
+      borderRadius: 12,
+      padding: 16,
+      alignItems: "center",
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.2,
+      shadowRadius: 4,
+      elevation: 4,
+   },
+   doneButtonText: {
+      color: "#fff",
+      fontSize: 16,
+      fontWeight: "bold",
    },
 });
