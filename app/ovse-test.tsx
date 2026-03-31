@@ -187,10 +187,37 @@ export default function OVSETestScreen() {
    const [pollCount, setPollCount] = useState(0);
    const [ovseResult, setOvseResult] = useState<any>(null);
    const [showResultModal, setShowResultModal] = useState(false);
+   const [debugLogs, setDebugLogs] = useState<Array<{ time: string; type: string; message: string }>>([]);
+   const [showDebugPanel, setShowDebugPanel] = useState(true);
+   const [autoScrollLogs, setAutoScrollLogs] = useState(true);
+   const debugScrollRef = useRef<ScrollView>(null);
+   const autoScrollLogsRef = useRef(true);
 
    // Refs for polling control
    const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
    const appStateRef = useRef(AppState.currentState);
+
+   useEffect(() => {
+      autoScrollLogsRef.current = autoScrollLogs;
+   }, [autoScrollLogs]);
+
+   // Debug logger function
+   const addLog = (type: "INFO" | "SUCCESS" | "ERROR" | "API" | "METHOD", message: string) => {
+      const now = new Date();
+      const timeStr = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}:${now.getSeconds().toString().padStart(2, "0")}.${now.getMilliseconds().toString().padStart(3, "0")}`;
+      const logEntry = { time: timeStr, type, message };
+      setDebugLogs((prev) => [...prev, logEntry]);
+      console.log(`[${type}] ${message}`);
+      // Scroll only when user keeps auto-scroll enabled.
+      if (autoScrollLogsRef.current) {
+         setTimeout(() => debugScrollRef.current?.scrollToEnd({ animated: true }), 100);
+      }
+   };
+
+   const clearLogs = () => {
+      addLog("INFO", "🗑️ Debug logs cleared");
+      setDebugLogs([]);
+   };
 
    const handleBack = () => {
       // Clean up polling on exit
@@ -288,37 +315,48 @@ export default function OVSETestScreen() {
    }, []);
 
    const handleSubmit = async () => {
+      addLog("METHOD", "▶️ handleSubmit() called");
       if (!apiKey.trim()) {
+         addLog("ERROR", "API Key is empty");
          Alert.alert("Error", "Please enter an API Key");
          return;
       }
 
       setIsLoading(true);
       setStatus("Generating intent for app-to-app flow...");
+      addLog("INFO", "Starting OVSE flow...");
 
       try {
          // Single API call to generate token for APP channel
+         addLog("API", "📤 Calling generateToken API (channel: APP)");
          const tokenResponse = await OVSEAPIService.generateToken(apiKey, "APP");
+         addLog("API", `📥 Token Response: ${JSON.stringify(tokenResponse).substring(0, 200)}...`);
          console.log("Token Response:", tokenResponse);
 
          // Check response structure
          if (tokenResponse?.status !== 200 || !tokenResponse?.data) {
+            addLog("ERROR", `Invalid response: status=${tokenResponse?.status}`);
             throw new Error(tokenResponse?.data?.message || "Failed to generate token");
          }
+         addLog("SUCCESS", "✅ Token generated successfully");
 
          // API can return either scan_uri or jwt_token depending on implementation
          const { transaction_id, scan_uri, jwt_token, expires_at } = tokenResponse.data;
+         addLog("INFO", `Transaction ID: ${transaction_id}`);
 
          // Use jwt_token if scan_uri is not present
          const intentToken = scan_uri || jwt_token;
+         addLog("INFO", `Intent token length: ${intentToken?.length || 0}`);
 
          if (!transaction_id || !intentToken) {
+            addLog("ERROR", "Missing transaction_id or token");
             throw new Error(
                `Invalid response: missing transaction_id or token. Got: ${JSON.stringify(tokenResponse.data)}`,
             );
          }
 
          // Decode JWT to verify backend configuration
+         addLog("INFO", "🔍 Decoding JWT token...");
          console.log("\n=== JWT VERIFICATION ===");
          try {
             const jwtParts = intentToken.split(".");
@@ -336,6 +374,12 @@ export default function OVSETestScreen() {
                );
 
                console.log("JWT Payload:", JSON.stringify(payload, null, 2));
+               addLog("INFO", `JWT aid: ${payload.aid}`);
+               addLog("INFO", `JWT asig: ${payload.asig?.substring(0, 20)}...`);
+               addLog("INFO", `JWT ac (Client ID): ${payload.ac}`);
+               addLog("INFO", `JWT sa (Reg#): ${payload.sa}`);
+               addLog("INFO", `JWT channel: ${payload.ch}`);
+               addLog("INFO", `JWT callback: ${payload.cb}`);
                console.log("\n=== CRITICAL FIELDS ===");
                console.log("aid (app_package_id):", payload.aid);
                console.log("asig (app_signature):", payload.asig);
@@ -347,6 +391,7 @@ export default function OVSETestScreen() {
 
                // Check if Bundle ID matches what we're sending
                if (payload.aid && payload.aid !== "in.ongrid.lav") {
+                  addLog("ERROR", `⚠️ Bundle ID mismatch! JWT: ${payload.aid}, Expected: in.ongrid.lav`);
                   console.log("⚠️ WARNING: Bundle ID mismatch!");
                   console.log("  JWT aid:", payload.aid);
                   console.log("  Expected: in.ongrid.lav");
@@ -378,6 +423,7 @@ export default function OVSETestScreen() {
          });
 
          // Launch Aadhaar app with intent token
+         addLog("METHOD", `🚀 Launching Aadhaar app on ${Platform.OS}`);
          console.log("Launching Aadhaar app on", Platform.OS);
          console.log("Intent token length:", intentToken.length);
 
@@ -402,12 +448,15 @@ export default function OVSETestScreen() {
 
                console.log("\n=== iOS App Launch ===");
                console.log("Using URL:", aadhaarUrl.substring(0, 100) + "...");
+               addLog("INFO", `iOS URL: ${aadhaarUrl.substring(0, 80)}...`);
 
                await Linking.openURL(aadhaarUrl);
+               addLog("SUCCESS", "✅ Aadhaar app launched (iOS)");
                console.log("✅ Aadhaar app launched successfully");
                setStatus("Aadhaar app launched. Complete verification there...");
 
                // Start polling IMMEDIATELY (no delay)
+               addLog("METHOD", "🔄 Starting polling...");
                startPolling(apiKey, transaction_id);
             } else {
                // Android: Use official UIDAI Intent as per documentation
@@ -424,22 +473,27 @@ export default function OVSETestScreen() {
                }
 
                try {
+                  addLog("INFO", `Android token length: ${androidToken.length}`);
                   console.log("Launching Aadhaar app via native module with token length:", androidToken.length);
 
                   // Use native module to launch with proper Intent.putExtra()
                   await OvseModule.launchAadhaarApp(androidToken);
 
+                  addLog("SUCCESS", "✅ Aadhaar app launched (Android)");
                   console.log(`✅ Aadhaar app launched successfully`);
                   setStatus("Aadhaar app launched. Complete verification there...");
                } catch (err: any) {
+                  addLog("ERROR", `Launch failed: ${err.message}`);
                   console.log(`Failed to launch:`, err);
                   throw new Error(err.message || "Unable to launch Aadhaar app");
                }
 
                // Start polling IMMEDIATELY (no delay)
+               addLog("METHOD", "🔄 Starting polling...");
                startPolling(apiKey, transaction_id);
             }
          } catch (error: any) {
+            addLog("ERROR", `❌ Failed to launch Aadhaar: ${error.message}`);
             console.error("Failed to launch Aadhaar app:", error);
             const errorMessage = error.message || error.toString();
 
@@ -456,6 +510,7 @@ export default function OVSETestScreen() {
             );
          }
       } catch (error: any) {
+         addLog("ERROR", `❌ OVSE Error: ${error.message || error}`);
          console.error("OVSE Error:", error);
          const errorMsg = error.message || error.toString() || "Failed to complete OVSE flow";
          Alert.alert("Error", errorMsg);
@@ -468,12 +523,16 @@ export default function OVSETestScreen() {
 
    // Poll once immediately
    const pollOnce = async (apiKey: string, transactionId: string) => {
+      addLog("METHOD", "🔍 pollOnce() called");
       try {
+         addLog("API", "📤 Calling checkStatus API (immediate)");
          const statusResponse = await OVSEAPIService.checkStatus(apiKey, transactionId);
+         addLog("API", `📥 Status: ${JSON.stringify(statusResponse).substring(0, 150)}...`);
          console.log("Immediate poll result:", statusResponse);
 
          // New API returns code 1001 for callback received
          if (statusResponse?.data?.code === "1001" || statusResponse?.data?.code === 1001) {
+            addLog("SUCCESS", "🎉 Verification Complete! Code: 1001");
             stopPolling();
             await clearRuntime();
             setStatus(`✅ Verification Complete!`);
@@ -488,12 +547,14 @@ export default function OVSETestScreen() {
    };
 
    const startPolling = async (apiKey: string, transactionId: string) => {
+      addLog("METHOD", "▶️ startPolling() called");
       // Clear any existing polling interval
       stopPolling();
 
       setPollingActive(true);
       setPollCount(0);
       setStatus("Polling for status...");
+      addLog("INFO", "⏰ Polling started (5s interval, 60 max attempts)");
 
       let attempts = 0;
       const maxAttempts = 60; // 5 minutes at 5-second intervals
@@ -503,11 +564,17 @@ export default function OVSETestScreen() {
          setPollCount(attempts);
 
          try {
+            addLog("API", `📤 Poll ${attempts}/${maxAttempts}: Checking status...`);
             const statusResponse = await OVSEAPIService.checkStatus(apiKey, transactionId);
+            addLog(
+               "API",
+               `📥 Poll ${attempts}: Code ${statusResponse?.data?.code}, Msg: ${statusResponse?.data?.message}`,
+            );
             console.log(`Poll ${attempts}/${maxAttempts}:`, statusResponse);
 
             // Check for callback received (code 1001)
             if (statusResponse?.data?.code === "1001" || statusResponse?.data?.code === 1001) {
+               addLog("SUCCESS", "🎉 SUCCESS! Received code 1001 - Verification complete");
                stopPolling();
                await clearRuntime();
                setStatus(`✅ Verification Complete!`);
@@ -522,6 +589,7 @@ export default function OVSETestScreen() {
          }
 
          if (attempts >= maxAttempts) {
+            addLog("ERROR", "⏱️ Polling timeout - reached 60 attempts (5 minutes)");
             stopPolling();
             await clearRuntime();
             setStatus("Polling timeout after 5 minutes");
@@ -634,6 +702,54 @@ export default function OVSETestScreen() {
                      <Text style={styles.instructionsText}>4. Aadhaar app launches automatically</Text>
                      <Text style={styles.instructionsText}>5. Complete biometric in Aadhaar app</Text>
                      <Text style={styles.instructionsText}>6. Return to see verification result</Text>
+                  </View>
+
+                  {/* Debug Panel */}
+                  <View style={styles.debugPanel}>
+                     <TouchableOpacity style={styles.debugHeader} onPress={() => setShowDebugPanel(!showDebugPanel)}>
+                        <Text style={styles.debugTitle}>🐛 Debug Logs ({debugLogs.length})</Text>
+                        <Text style={styles.debugToggle}>{showDebugPanel ? "▼" : "▶"}</Text>
+                     </TouchableOpacity>
+
+                     {showDebugPanel && (
+                        <>
+                           <View style={styles.debugControlsRow}>
+                              <TouchableOpacity
+                                 style={[styles.debugToggleButton, autoScrollLogs && styles.debugToggleButtonActive]}
+                                 onPress={() => setAutoScrollLogs(!autoScrollLogs)}
+                              >
+                                 <Text style={styles.debugToggleButtonText}>
+                                    Auto-scroll: {autoScrollLogs ? "ON" : "OFF"}
+                                 </Text>
+                              </TouchableOpacity>
+                           </View>
+                           <ScrollView ref={debugScrollRef} style={styles.debugScroll} nestedScrollEnabled={true}>
+                              {debugLogs.map((log, idx) => (
+                                 <View key={idx} style={styles.debugLogRow}>
+                                    <Text style={styles.debugTime}>{log.time}</Text>
+                                    <Text
+                                       style={[
+                                          styles.debugType,
+                                          log.type === "ERROR" && styles.debugTypeError,
+                                          log.type === "SUCCESS" && styles.debugTypeSuccess,
+                                          log.type === "API" && styles.debugTypeApi,
+                                          log.type === "METHOD" && styles.debugTypeMethod,
+                                       ]}
+                                    >
+                                       {log.type}
+                                    </Text>
+                                    <Text style={styles.debugMessage}>{log.message}</Text>
+                                 </View>
+                              ))}
+                              {debugLogs.length === 0 && (
+                                 <Text style={styles.debugEmpty}>No logs yet. Start OVSE flow to see logs.</Text>
+                              )}
+                           </ScrollView>
+                           <TouchableOpacity style={styles.debugClearButton} onPress={clearLogs}>
+                              <Text style={styles.debugClearText}>Clear Logs</Text>
+                           </TouchableOpacity>
+                        </>
+                     )}
                   </View>
                </ScrollView>
             </KeyboardAvoidingView>
@@ -1037,6 +1153,107 @@ const styles = StyleSheet.create({
    doneButtonText: {
       color: "#fff",
       fontSize: 16,
+      fontWeight: "bold",
+   },
+   // Debug Panel Styles
+   debugPanel: {
+      backgroundColor: "rgba(0, 0, 0, 0.8)",
+      borderRadius: 12,
+      marginTop: 20,
+      overflow: "hidden",
+   },
+   debugHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      padding: 12,
+      backgroundColor: "rgba(255, 255, 255, 0.1)",
+   },
+   debugTitle: {
+      color: "#fff",
+      fontSize: 14,
+      fontWeight: "bold",
+   },
+   debugToggle: {
+      color: "#fff",
+      fontSize: 14,
+   },
+   debugScroll: {
+      maxHeight: 300,
+      paddingHorizontal: 8,
+   },
+   debugControlsRow: {
+      paddingHorizontal: 8,
+      paddingTop: 8,
+   },
+   debugToggleButton: {
+      backgroundColor: "rgba(255, 255, 255, 0.12)",
+      borderRadius: 8,
+      paddingVertical: 8,
+      paddingHorizontal: 10,
+      alignSelf: "flex-start",
+   },
+   debugToggleButtonActive: {
+      backgroundColor: "rgba(81, 207, 102, 0.25)",
+   },
+   debugToggleButtonText: {
+      color: "#fff",
+      fontSize: 12,
+      fontWeight: "600",
+   },
+   debugLogRow: {
+      flexDirection: "row",
+      paddingVertical: 4,
+      borderBottomWidth: 1,
+      borderBottomColor: "rgba(255, 255, 255, 0.1)",
+   },
+   debugTime: {
+      color: "#888",
+      fontSize: 10,
+      fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+      width: 70,
+   },
+   debugType: {
+      color: "#4facfe",
+      fontSize: 10,
+      fontWeight: "bold",
+      width: 50,
+      fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+   },
+   debugTypeError: {
+      color: "#ff6b6b",
+   },
+   debugTypeSuccess: {
+      color: "#51cf66",
+   },
+   debugTypeApi: {
+      color: "#ffd43b",
+   },
+   debugTypeMethod: {
+      color: "#a78bfa",
+   },
+   debugMessage: {
+      color: "#fff",
+      fontSize: 11,
+      flex: 1,
+      fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+   },
+   debugEmpty: {
+      color: "#888",
+      fontSize: 12,
+      textAlign: "center",
+      padding: 20,
+   },
+   debugClearButton: {
+      backgroundColor: "#ff6b6b",
+      padding: 10,
+      margin: 8,
+      borderRadius: 8,
+      alignItems: "center",
+   },
+   debugClearText: {
+      color: "#fff",
+      fontSize: 12,
       fontWeight: "bold",
    },
 });
