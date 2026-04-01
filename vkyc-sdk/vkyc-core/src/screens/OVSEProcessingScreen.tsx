@@ -6,7 +6,9 @@
 import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
 import React, { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useDispatch } from "react-redux";
+import ConfigManager from "../config/ConfigManager";
 import OVSEAPIService from "../services/OVSEAPIService";
 import { setLoading } from "../store";
 import ThemeManager from "../theme/ThemeManager";
@@ -14,7 +16,7 @@ import { ErrorCode } from "../types";
 import NativeBridge from "../utils/NativeBridge";
 
 type OVSEProcessingRouteProp = RouteProp<
-   { OVSEProcessing: { sessionId: string; transactionId: string; jwtToken: string } },
+   { OVSEProcessing: { apiKey: string; transactionId: string; jwtToken: string } },
    "OVSEProcessing"
 >;
 
@@ -22,10 +24,12 @@ const OVSEProcessingScreen: React.FC = () => {
    const navigation = useNavigation();
    const route = useRoute<OVSEProcessingRouteProp>();
    const dispatch = useDispatch();
-   const commonStyles = ThemeManager.getCommonStyles();
    const colors = ThemeManager.getColors();
 
-   const { sessionId, transactionId, jwtToken } = route.params || {};
+   const { apiKey, transactionId, jwtToken } = route.params || {};
+   const config = ConfigManager.getConfig();
+   const ovseConfig = config.ovse;
+   const maxAttempts = ovseConfig?.maxPollAttempts || 60;
 
    const [statusText, setStatusText] = useState("Launching Aadhaar app...");
    const [isPolling, setIsPolling] = useState(false);
@@ -75,36 +79,31 @@ const OVSEProcessingScreen: React.FC = () => {
 
          dispatch(setLoading(true));
 
-         NativeBridge.onEvent("ovse_polling_started", {
-            sessionId,
-            transactionId,
-         });
+         NativeBridge.onEvent("ovse_polling_started", { transactionId });
 
          // Poll status every 5 seconds
          let attempt = 0;
-         const maxAttempts = 60; // 5 minutes
-         const intervalMs = 5000;
+         const intervalMs = ovseConfig?.pollingIntervalMs || 5000;
 
          const pollInterval = setInterval(async () => {
             try {
                attempt++;
                setPollCount(attempt);
 
-               const status = await OVSEAPIService.checkStatus(sessionId, transactionId);
+               const status = await OVSEAPIService.checkStatus(apiKey, transactionId);
 
                NativeBridge.onEvent("ovse_status_checked", {
                   attempt,
-                  code: status.code,
+                  code: status?.data?.code,
                });
 
                // Check if callback received
-               if (status.code !== "CALLBACK_NOT_YET_RECEIVED") {
+               if (status?.data?.code === "1001" || status?.data?.code === 1001) {
                   clearInterval(pollInterval);
 
                   // Navigate to result screen
                   (navigation as any).navigate("OVSEResult", {
                      status,
-                     sessionId,
                      transactionId,
                   });
                } else if (attempt >= maxAttempts) {
@@ -158,95 +157,110 @@ const OVSEProcessingScreen: React.FC = () => {
    };
 
    return (
-      <View style={commonStyles.centerContainer}>
-         <View style={styles.content}>
-            <ActivityIndicator size="large" color={colors.primary} style={styles.loader} />
+      <SafeAreaView style={styles.safeArea}>
+         <View style={styles.container}>
+            <View style={styles.statusCard}>
+               <ActivityIndicator size="large" color={colors.primary} style={styles.loader} />
+               <Text style={styles.title}>Processing Verification</Text>
+               <Text style={styles.statusText}>{statusText}</Text>
 
-            <Text style={commonStyles.title}>Processing Verification</Text>
-            <Text style={[commonStyles.subtitle, styles.statusText]}>{statusText}</Text>
-
-            {isPolling && (
-               <View style={styles.pollingInfo}>
-                  <Text style={styles.pollingText}>Checking status... (Attempt {pollCount}/60)</Text>
-                  <Text style={styles.pollingNote}>
-                     This may take a few moments. Please complete the verification in the Aadhaar app.
-                  </Text>
-               </View>
-            )}
-
-            <View style={styles.instructionBox}>
-               <Text style={styles.instructionTitle}>📱 Instructions:</Text>
-               <Text style={styles.instructionText}>1. Complete the verification in the Aadhaar app</Text>
-               <Text style={styles.instructionText}>2. Return to this app after completion</Text>
-               <Text style={styles.instructionText}>3. We'll automatically detect when you're done</Text>
+               {isPolling && (
+                  <View style={styles.pollIndicator}>
+                     <ActivityIndicator color="#4facfe" style={styles.pollSpinner} />
+                     <Text style={styles.pollText}>
+                        Poll {pollCount}/{maxAttempts}
+                     </Text>
+                  </View>
+               )}
             </View>
 
-            <TouchableOpacity
-               style={[commonStyles.secondaryButton, styles.cancelButton]}
-               onPress={handleCancel}
-               activeOpacity={0.8}
-            >
-               <Text style={commonStyles.secondaryButtonText}>Cancel Verification</Text>
+            <View style={styles.instructionBox}>
+               <Text style={styles.instructionTitle}>Instructions</Text>
+               <Text style={styles.instructionText}>1. Complete the verification in the Aadhaar app</Text>
+               <Text style={styles.instructionText}>2. Return to this app after completion</Text>
+               <Text style={styles.instructionText}>3. We will detect success automatically</Text>
+            </View>
+
+            <TouchableOpacity style={styles.cancelButton} onPress={handleCancel} activeOpacity={0.8}>
+               <Text style={styles.cancelButtonText}>Cancel Verification</Text>
             </TouchableOpacity>
          </View>
-      </View>
+      </SafeAreaView>
    );
 };
 
 const styles = StyleSheet.create({
-   content: {
-      width: "100%",
-      maxWidth: 400,
-      alignItems: "center",
+   safeArea: {
+      flex: 1,
+      backgroundColor: "#667eea",
+   },
+   container: {
+      flex: 1,
+      justifyContent: "center",
       paddingHorizontal: 20,
    },
+   statusCard: {
+      backgroundColor: "rgba(255, 255, 255, 0.15)",
+      borderRadius: 16,
+      padding: 20,
+      marginBottom: 20,
+   },
    loader: {
-      marginBottom: 32,
+      marginBottom: 20,
+   },
+   title: {
+      color: "#fff",
+      fontSize: 22,
+      fontWeight: "700",
+      marginBottom: 10,
+      textAlign: "center",
    },
    statusText: {
-      marginTop: 16,
-      fontStyle: "italic",
-   },
-   pollingInfo: {
-      marginTop: 32,
-      width: "100%",
-      alignItems: "center",
-   },
-   pollingText: {
+      color: "rgba(255, 255, 255, 0.9)",
       fontSize: 14,
-      color: "#4A5568",
-      fontWeight: "600",
-      marginBottom: 8,
-   },
-   pollingNote: {
-      fontSize: 12,
-      color: "#718096",
       textAlign: "center",
-      lineHeight: 18,
+   },
+   pollIndicator: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      marginTop: 14,
+   },
+   pollSpinner: {
+      marginRight: 8,
+   },
+   pollText: {
+      color: "#4facfe",
+      fontSize: 14,
+      fontWeight: "600",
    },
    instructionBox: {
-      marginTop: 32,
-      padding: 20,
-      backgroundColor: "#F7FAFC",
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: "#E2E8F0",
-      width: "100%",
+      backgroundColor: "rgba(255, 255, 255, 0.15)",
+      borderRadius: 16,
+      padding: 16,
    },
    instructionTitle: {
+      color: "#fff",
       fontSize: 16,
       fontWeight: "700",
-      color: "#1A202C",
-      marginBottom: 16,
+      marginBottom: 8,
    },
    instructionText: {
       fontSize: 14,
-      color: "#4A5568",
-      lineHeight: 22,
-      marginBottom: 8,
+      color: "rgba(255, 255, 255, 0.9)",
+      marginBottom: 4,
    },
    cancelButton: {
-      marginTop: 32,
+      backgroundColor: "#ff6b6b",
+      borderRadius: 12,
+      paddingVertical: 14,
+      alignItems: "center",
+      marginTop: 20,
+   },
+   cancelButtonText: {
+      color: "#fff",
+      fontWeight: "700",
+      fontSize: 15,
    },
 });
 

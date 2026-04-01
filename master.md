@@ -1,8 +1,8 @@
 # Aadhaar OVSE Complete Project Documentation
 
 **Project**: Aadhaar OVSE (Online Verification with Selective Disclosure) Integration  
-**Last Updated**: March 23, 2026  
-**Status**: ✅ iOS & Android Native Builds Complete
+**Last Updated**: March 31, 2026  
+**Status**: ✅ iOS/Android Native + SDK Productization (RN/iOS complete, Android AAR pending local Gradle)
 
 ---
 
@@ -22,6 +22,7 @@
 12.   [SDK Distribution Strategy](#12-sdk-distribution-strategy)
 13.   [Troubleshooting](#13-troubleshooting)
 14.   [File Structure](#14-file-structure)
+15.   [SDK Productization Update (March 31, 2026)](#15-sdk-productization-update-march-31-2026)
 
 ---
 
@@ -2701,137 +2702,199 @@ aadhaar-ovse-sop/
 
 ### ✅ Completed
 
-1. **API Migration**: Successfully migrated to Gridlines 2-step API (generate-token → status)
-2. **iOS Native Build**: Bundle ID changed to `in.ongrid.lav`, Team ID: `DZ54P8HK5D`
-3. **iOS App Launch**: Successfully launches Aadhaar app with `pehchaan://` scheme
-4. **Android Native Build**: Generated native project, built APK successfully
-5. **Android Configuration**: Package `in.ongrid.lav`, SHA-256 certificate extracted and configured
-6. **AsyncStorage Removal**: Removed blocking dependency, replaced with no-ops
-7. **Debug Keystore**: Created at `~/.android/debug.keystore`
-8. **Release APK Build**: Standalone 80MB APK with bundled JavaScript (BUILD SUCCESSFUL in 22-28s)
-9. **Android Native Module**: Created OvseModule.kt for proper Intent launching
-10.   **Android Intent Working**: ✅ Successfully launches Aadhaar app on emulator and devices
-11.   **Emulator Testing**: Verified complete OVSE flow on Android emulator
+1. **API Migration**: Successfully migrated to Gridlines 2-step API (`generate-token` → `status`).
+2. **iOS Native Build**: Bundle ID changed to `in.ongrid.lav`, Team ID `DZ54P8HK5D`.
+3. **iOS App Launch**: Successfully launches Aadhaar app with `pehchaan://` scheme.
+4. **Android Native Build**: Generated native project and built APK successfully.
+5. **Android Native Module**: Created `OvseModule.kt` + `OvsePackage.kt`, registered in `MainApplication.kt`.
+6. **Android Intent Launch**: Aadhaar app launch working with official extra (`request`) via native intent path.
+7. **SDK Productization (Monorepo)**: Added full OVSE mode contract and flow support in `vkyc-sdk` for RN/iOS/Android consumers.
+8. **React Native SDK Packaging**: `vkyc-core` tarball generated successfully (`vkyc-core-1.0.0.tgz`).
+9. **iOS SDK Validation**: Swift package manifest and podspec lint both validated successfully.
+10.   **Core Type Safety**: `vkyc-core` typecheck (`tsc --noEmit`) passing after OVSE updates.
 
 ### 🟡 Pending
 
-1. **iOS UIDAI Issue**: Infinite loading in Aadhaar app (backend environment mismatch)
-2. **Backend Resolution**: Clarify dev API vs production mAadhaar app compatibility
-3. **State Persistence**: Implement alternative to AsyncStorage if needed (MMKV/SecureStore)
-4. **Production Deployment**: Requires UIDAI environment issue resolution
-5. **Real Device Testing**: Test complete OVSE verification flow with actual biometrics
+1. **Android AAR Validation**: Could not run AAR packaging command in this environment because `gradle` CLI is unavailable globally.
+2. **iOS UIDAI Issue**: Aadhaar app consent path opens, but callback completion remains pending (environment/backend alignment still required).
+3. **Real Device End-to-End**: Production-signing and registered production signatures still needed for final client rollout.
 
-### ❌ Known Issues
+### ❌ Known Issues / Risks
 
-1. **iOS Aadhaar Integration**: No logo/name displayed, infinite loading (UIDAI env mismatch - NOT a code issue)
-2. **No State Persistence**: AsyncStorage removed, no runtime persistence currently
-3. **Bundle ID Mystery**: `in.ongrid.lav` registered with UIDAI but no App Store app exists
+1. **App Signature Confusion Risk (Android)**: Some older notes used colon-hex SHA-256 display format; the current app flow expects Base64 of raw SHA-256 bytes in `app_signature` for OVSE validation.
+2. **Environment Mismatch Risk**: Dev API and production Aadhaar app combinations can produce non-terminal polling behavior.
+3. **Docs Drift Risk**: Any new SDK changes must be updated in this `master.md` immediately to avoid duplicate README drift.
 
-### ✨ Recent Achievements (March 23, 2026)
+### 📊 Platform and Packaging Status
 
-1. **Native Module Solution**: Created Kotlin native module to properly launch Android intents (React Native Linking API limitations bypassed)
-2. **Release APK**: Built standalone 80MB production APK (vs 168MB debug APK)
-3. **Complete Documentation**: Updated master.md with full Android implementation details
-4. **Emulator Testing**: Validated complete flow on Android emulator with pehchaan test app
-5. **Build Process**: Documented debug vs release APK differences, build commands, and troubleshooting
-
-### 📊 Platform Status
-
-| Platform | Build Status | App Launch | OVSE Flow  | Notes                                                |
-| -------- | ------------ | ---------- | ---------- | ---------------------------------------------------- |
-| iOS      | ✅ Complete  | ✅ Works   | ⚠️ Pending | Launches Aadhaar but env mismatch causes issues      |
-| Android  | ✅ Complete  | ✅ Works   | ✅ Tested  | Native module solution working perfectly on emulator |
-
-### 🎯 Technical Highlights
-
-**Android Native Module**:
-
-- **Problem**: React Native Linking API couldn't launch Aadhaar intent
-- **Solution**: Created native Kotlin module (OvseModule.kt) using Android Intent APIs
-- **Files Created**: OvseModule.kt, OvsePackage.kt, updated MainApplication.kt
-- **Result**: ✅ Working perfectly - Aadhaar app launches reliably
-
-**Release APK**:
-
-- **Size**: 80MB (optimized, bundled JavaScript)
-- **Standalone**: Yes (no Metro bundler required)
-- **Build Time**: 22-28 seconds (bundles 1333 modules)
-- **Location**: `android/app/build/outputs/apk/release/app-release.apk`
+| Deliverable                                     | Status      | Validation Result                                           |
+| ----------------------------------------------- | ----------- | ----------------------------------------------------------- |
+| React Native SDK (`vkyc-core`)                  | ✅ Complete | `npm pack` succeeded (`vkyc-core-1.0.0.tgz`)                |
+| iOS SDK (`vkyc-ios-sdk`)                        | ✅ Complete | `swift package dump-package` + `pod lib lint` passed        |
+| Android SDK (`vkyc-android-sdk`)                | 🟡 Partial  | AAR command blocked in current machine (`gradle` not found) |
+| Native Android app launch (`app/ovse-test.tsx`) | ✅ Complete | Aadhaar intent launch path verified via native module       |
 
 ---
 
 ## Next Steps
 
-### Immediate (This Week)
-
-1. **Test Android APK**: Install on device, verify OVSE flow
-2. **Backend Investigation**: Contact UIDAI/Gridlines about environment mismatch
-3. **Implement Persistence**: If needed, add MMKV or expo-secure-store
-
-### Short-Term (Next 2 Weeks)
-
-1. **Resolve iOS Issue**: Get production UIDAI credentials or clarify sandbox setup
-2. **SDK Development**: Extract logic into reusable packages
-3. **Documentation**: Create integration guides for SDK users
-
-### Long-Term (Next Quarter)
-
-1. **Production Deployment**: Release to App Store and Play Store
-2. **SDK Distribution**: Publish to npm, CocoaPods, Maven
-3. **Client Onboarding**: Support 5+ client integrations
+1. **Android AAR Build Verification**: Add/use Gradle wrapper in `vkyc-android-sdk` or install Gradle globally, then run release + AAR generation command.
+2. **UIDAI Identity Alignment**: Confirm `aid`/`asig` format and environment mapping with backend for production callback completion.
+3. **SDK Release Freeze**: Tag versions and publish artifacts only after Android AAR verification and one real-device callback success.
 
 ---
 
-## 14. VKYC SDK Structure (Legacy)
+## 15. SDK Productization Update (March 31, 2026)
 
-**Note**: The vkyc-sdk folder contains legacy code from earlier development. The main OVSE implementation is now in `app/ovse-test.tsx`.
+This section replaces standalone SDK README files and centralizes all SDK integration and packaging details.
 
-### Directory Structure
+### 15.1 Scope Delivered
 
+All three SDK tracks now support runtime-configurable OVSE launch:
+
+- React Native core SDK (`vkyc-sdk/vkyc-core`)
+- Android native SDK wrapper (`vkyc-sdk/vkyc-android-sdk`)
+- iOS native SDK wrapper (`vkyc-sdk/vkyc-ios-sdk`)
+
+### 15.2 Unified OVSE Configuration Contract
+
+The SDK accepts `mode: "ovse"` and an `ovse` object. Key options:
+
+- `apiBaseUrl`
+- `apiKey`, `initialApiKey`
+- `channelType` (`APP` or `WEB`)
+- `templateId`, `expiryTimeInSeconds`, `consent`
+- `appPackageId`, `appSignature`
+- `pollingIntervalMs`, `maxPollAttempts`
+
+Optional client text overrides are supported via `texts`:
+
+- `welcomeTitle`, `welcomeSubtitle`
+- `startButtonLabel`, `startOVSEButtonLabel`, `cancelButtonLabel`
+- `ovseTitle`, `ovseSubtitle`
+- `ovseInputLabel`, `ovseInputPlaceholder`, `ovseSubmitLabel`
+
+### 15.3 Core Flow and API Behavior
+
+- OVSE API service in SDK core now uses current Gridlines endpoints:
+   - `POST /generate-token`
+   - `GET /status`
+- Status polling success is mapped to code `1001`.
+- Result handling in the SDK reads nested response fields (`status.data.code`) and sends success/failure events through native bridge callbacks.
+
+### 15.4 Screens and UX Alignment
+
+OVSE-specific SDK screens were updated to match current app flow and provide cleaner client embedding:
+
+- `OVSETokenInputScreen.tsx`
+- `OVSEProcessingScreen.tsx`
+- `OVSEResultScreen.tsx`
+
+Changes include:
+
+- Updated APP flow params and API key handling
+- Configurable polling behavior from host config
+- Modernized card-based UI aligned with `app/ovse-test.tsx`
+- Correct success detection logic tied to code `1001`
+
+### 15.5 Platform Host Integration Samples
+
+Minimal integration samples are now present for all platforms:
+
+1. **React Native host sample**
+   - `vkyc-sdk/examples/react-native-host/App.tsx`
+2. **Android native host sample**
+   - `vkyc-sdk/vkyc-android-sdk/examples/MainActivity.kt`
+3. **iOS native host samples**
+   - Swift: `vkyc-sdk/vkyc-ios-sdk/Examples/Swift/ViewController.swift`
+   - Objective-C: `vkyc-sdk/vkyc-ios-sdk/Examples/Objective-C/ViewController.m`
+
+These samples demonstrate `mode = ovse`, passing host API keys, app identifiers/signatures, and optional text labels.
+
+### 15.6 Packaging and Verification Commands
+
+#### React Native SDK (`vkyc-core`)
+
+```bash
+cd vkyc-sdk/vkyc-core
+npm run typecheck
+npm pack
 ```
-vkyc-sdk/
-├── vkyc-core/                 # React Native core app with all UI/logic
-├── vkyc-android-sdk/          # Native Android wrapper (.aar)
-├── vkyc-ios-sdk/              # Native iOS wrapper (.xcframework)
-└── vkyc-react-native-sdk/     # NPM package for React Native apps
+
+Result:
+
+- ✅ Typecheck passed.
+- ✅ Tarball generated: `vkyc-core-1.0.0.tgz`.
+
+#### iOS SDK (`vkyc-ios-sdk`)
+
+```bash
+cd vkyc-sdk/vkyc-ios-sdk
+swift package dump-package
+pod lib lint VKYC.podspec --quick --allow-warnings
 ```
 
-### VKYC SDK Components
+Result:
 
-**vkyc-core**: React Native application with VKYC flow
+- ✅ Swift package manifest validated.
+- ✅ Podspec lint passed.
 
-- Services: OVSEAPIService for API integration
-- Screens: Token input, processing, result screens
-- Utils: Native bridge for platform-specific code
+#### Android SDK (`vkyc-android-sdk`)
 
-**vkyc-android-sdk**: Native Android SDK
+```bash
+cd vkyc-sdk/vkyc-android-sdk
+gradle clean assembleRelease generateAAR
+```
 
-- VKYCModule.kt with launchAadhaarApp() method
-- Generates .aar file for distribution
+Result:
 
-**vkyc-ios-sdk**: Native iOS SDK
+- ⚠️ Blocked on this machine: `gradle` command not found.
+- Recommendation: add Gradle wrapper in `vkyc-android-sdk` or run with an environment where Gradle CLI is installed.
 
-- VKYCBridgeModule.swift with app launch methods
-- Generates .xcframework for distribution
+### 15.7 SDK File Changes (Authoritative List)
 
-### Key Differences from Current Implementation
+Core SDK:
 
-| Feature              | VKYC SDK (Legacy)      | Current (ovse-test.tsx) |
-| -------------------- | ---------------------- | ----------------------- |
-| **API Endpoints**    | CloudFront (old)       | Gridlines (new)         |
-| **API Flow**         | 4-step process         | 2-step (simplified)     |
-| **Architecture**     | Multi-package monorepo | Single file             |
-| **State Management** | Redux                  | React hooks             |
-| **Platform Support** | Native modules         | Expo Linking API        |
+- `vkyc-sdk/vkyc-core/src/types/index.ts`
+- `vkyc-sdk/vkyc-core/src/config/ConfigManager.ts`
+- `vkyc-sdk/vkyc-core/src/services/OVSEAPIService.ts`
+- `vkyc-sdk/vkyc-core/src/navigation/AppNavigator.tsx`
+- `vkyc-sdk/vkyc-core/src/screens/WelcomeScreen.tsx`
+- `vkyc-sdk/vkyc-core/src/screens/OVSETokenInputScreen.tsx`
+- `vkyc-sdk/vkyc-core/src/screens/OVSEProcessingScreen.tsx`
+- `vkyc-sdk/vkyc-core/src/screens/OVSEResultScreen.tsx`
 
-**Current Status**: The main OVSE implementation has been refactored into `app/ovse-test.tsx` using the new Gridlines API. The vkyc-sdk folder is kept for reference but is not actively maintained.
+Android SDK:
+
+- `vkyc-sdk/vkyc-android-sdk/src/main/java/com/vkyc/sdk/VKYCConfig.kt`
+- `vkyc-sdk/vkyc-android-sdk/src/main/java/com/vkyc/sdk/VKYCModule.kt`
+- `vkyc-sdk/vkyc-android-sdk/examples/MainActivity.kt`
+
+iOS SDK:
+
+- `vkyc-sdk/vkyc-ios-sdk/Sources/VKYC/VKYCConfig.swift`
+- `vkyc-sdk/vkyc-ios-sdk/Sources/VKYC/VKYCBridgeModule.swift`
+- `vkyc-sdk/vkyc-ios-sdk/Examples/Swift/ViewController.swift`
+- `vkyc-sdk/vkyc-ios-sdk/Examples/Objective-C/ViewController.m`
+
+RN Host Example:
+
+- `vkyc-sdk/examples/react-native-host/App.tsx`
+
+### 15.8 Important Signature Note
+
+For Android APP-mode OVSE in latest flow:
+
+- Package ID example: `in.ongrid.lav`
+- `app_signature` should be provided in the exact format expected by UIDAI validation for the onboarding environment.
+- Current working integration sample uses Base64-encoded SHA-256 bytes (example: `+sYXRdwJA3hvue3mKpYrOZ9zSPC7b4mbgzJmdZEDO5w=`), not colon-delimited display format.
 
 ---
 
-**Document Version**: 2.0  
-**Last Updated**: March 23, 2026  
+**Document Version**: 2.1  
+**Last Updated**: March 31, 2026  
 **Updated By**: Development Team  
-**Changes**: Consolidated all .md files, added Android APK build completion, included VKYC SDK reference
+**Changes**: Added full SDK productization status, host samples, packaging validation results, and removed SDK README duplication.
 
 ---
 

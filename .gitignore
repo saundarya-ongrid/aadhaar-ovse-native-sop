@@ -41,3 +41,7 @@ app-example
 # generated native folders
 /ios
 /android
+
+# SDK generated artifacts
+vkyc-sdk/vkyc-ios-sdk/.build/
+vkyc-sdk/vkyc-core/*.tgz

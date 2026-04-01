@@ -1,0 +1,20 @@
+# Pods & CocoaPods
+Pods/
+.xcode.env.local
+
+# Xcode build
+build/
+DerivedData/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xccheckout
+xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Generated
+.build/
+
+# macOS
+.DS_Store

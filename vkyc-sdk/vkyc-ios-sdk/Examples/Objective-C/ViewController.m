@@ -7,7 +7,18 @@
 //
 
 #import "ViewController.h"
-@import VKYC;
+
+#if __has_include(<VKYC/VKYC-Swift.h>)
+#import <VKYC/VKYC-Swift.h>
+#define VKYC_SDK_AVAILABLE 1
+#elif __has_include("VKYC-Swift.h")
+#import "VKYC-Swift.h"
+#define VKYC_SDK_AVAILABLE 1
+#else
+#define VKYC_SDK_AVAILABLE 0
+#endif
+
+#if VKYC_SDK_AVAILABLE
 
 @interface ViewController () <VKYCDelegate>
 @property (nonatomic, strong) UIButton *startButton;
@@ -41,12 +52,40 @@
 #pragma mark - Example 1: Basic Integration
 
 - (void)startVKYCTapped {
-    // Create configuration
-    VKYCConfig *config = [[VKYCConfig alloc] initWithToken:@"your-token"
-                                                    apiKey:@"your-api-key"
-                                               environment:VKYCConfigEnvironmentStaging];
-    
-    // Start VKYC with blocks
+    [self startOVSE];
+}
+
+- (void)startOVSE {
+    VKYCConfig *config = [[VKYCConfig alloc] initWithToken:@""
+                                                    apiKey:@"YOUR_GRIDLINES_API_KEY"
+                                               environment:VKYCConfigEnvironmentStaging
+                                                      mode:VKYCConfigModeOvse];
+
+    VKYCOVSEOptions *ovse = [[VKYCOVSEOptions alloc] initWithApiBaseUrl:@"https://api-dev.gridlines.io/uidai-api/ovse"
+                                                                  apiKey:@"YOUR_GRIDLINES_API_KEY"
+                                                           initialApiKey:@"YOUR_GRIDLINES_API_KEY"
+                                                              channelType:@"APP"
+                                                               templateId:@"1"
+                                                      expiryTimeInSeconds:@3600
+                                                                  consent:@"Y"
+                                                             appPackageId:@"in.ongrid.lav"
+                                                             appSignature:@"DZ54P8HK5D"
+                                                        pollingIntervalMs:@5000
+                                                          maxPollAttempts:@60];
+    config.ovse = ovse;
+
+    VKYCTextOptions *texts = [[VKYCTextOptions alloc] initWithWelcomeTitle:@"Aadhaar OVSE"
+                                                            welcomeSubtitle:@"Secure verification powered by OnGrid"
+                                                            startButtonLabel:@"Start OVSE"
+                                                        startOVSEButtonLabel:nil
+                                                           cancelButtonLabel:nil
+                                                                  ovseTitle:@"Aadhaar OVSE Verification"
+                                                               ovseSubtitle:nil
+                                                             ovseInputLabel:@"API Key"
+                                                       ovseInputPlaceholder:nil
+                                                            ovseSubmitLabel:@"Start Flow"];
+    config.texts = texts;
+
     [VKYCManager startFrom:self
                     config:config
                    success:^(NSDictionary<NSString *,id> * _Nonnull result) {
@@ -225,3 +264,11 @@
 }
 
 @end
+
+#else
+
+@implementation ViewController
+
+@end
+
+#endif

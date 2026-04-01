@@ -27,8 +27,8 @@ export type RootStackParamList = {
    Success: { result: any };
    Error: { error: any };
    OVSETokenInput: undefined;
-   OVSEProcessing: { sessionId: string; transactionId: string; jwtToken: string };
-   OVSEResult: { status: any; sessionId: string; transactionId: string };
+   OVSEProcessing: { apiKey: string; transactionId: string; jwtToken: string };
+   OVSEResult: { status: any; transactionId: string };
 };
 
 const Stack = createStackNavigator<RootStackParamList>();

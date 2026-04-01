@@ -28,8 +28,44 @@ class MainActivity : AppCompatActivity() {
         
         // Setup button click listener
         findViewById<Button>(R.id.btnStartVKYC).setOnClickListener {
-            startVKYC()
+            startOVSE()
         }
+    }
+
+    /**
+     * Minimal OVSE-only integration sample
+     */
+    private fun startOVSE() {
+        val config = VKYCConfig(
+            apiKey = "YOUR_GRIDLINES_API_KEY",
+            environment = VKYCConfig.Environment.STAGING,
+            mode = VKYCConfig.Mode.OVSE
+        ).apply {
+            ovse = VKYCConfig.OVSE(
+                apiBaseUrl = "https://api-dev.gridlines.io/uidai-api/ovse",
+                apiKey = "YOUR_GRIDLINES_API_KEY",
+                initialApiKey = "YOUR_GRIDLINES_API_KEY",
+                channelType = "APP",
+                templateId = "1",
+                expiryTimeInSeconds = 3600,
+                consent = "Y",
+                appPackageId = "in.ongrid.lav",
+                appSignature = "+sYXRdwJA3hvue3mKpYrOZ9zSPC7b4mbgzJmdZEDO5w=",
+                pollingIntervalMs = 5000,
+                maxPollAttempts = 60
+            )
+
+            texts = VKYCConfig.Texts(
+                welcomeTitle = "Aadhaar OVSE",
+                welcomeSubtitle = "Secure verification powered by OnGrid",
+                startButtonLabel = "Start OVSE",
+                ovseTitle = "Aadhaar OVSE Verification",
+                ovseInputLabel = "API Key",
+                ovseSubmitLabel = "Start Flow"
+            )
+        }
+
+        VKYC.start(this, config, createCallback())
     }
     
     /**

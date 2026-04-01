@@ -149,8 +149,8 @@ class VKYCBridgeModule: NSObject, RCTBridgeModule {
                 return
             }
             
-            // URL scheme: pehchan://in.gov.uidai.pehchan?req=<jwt>
-            let urlString = "pehchan://in.gov.uidai.pehchan?req=\(encodedToken)"
+            // URL scheme: pehchaan://in.gov.uidai.pehchaan?req=<jwt>
+            let urlString = "pehchaan://in.gov.uidai.pehchaan?req=\(encodedToken)"
             
             guard let url = URL(string: urlString) else {
                 reject("INVALID_URL", "Failed to create URL", nil)

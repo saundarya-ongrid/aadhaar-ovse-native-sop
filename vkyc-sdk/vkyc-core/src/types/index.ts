@@ -10,9 +10,41 @@ export interface VKYCConfig {
    token: string;
    apiKey: string;
    environment: "staging" | "production";
+   mode?: SDKMode;
+   ovse?: OVSEConfig;
+   texts?: SDKTextConfig;
    theme?: VKYCTheme;
    features?: VKYCFeatures;
    metadata?: Record<string, any>;
+}
+
+export type SDKMode = "vkyc" | "ovse";
+
+export interface OVSEConfig {
+   apiBaseUrl?: string;
+   apiKey?: string;
+   initialApiKey?: string;
+   channelType?: "APP" | "WEB";
+   templateId?: string;
+   expiryTimeInSeconds?: number;
+   consent?: "Y" | "N";
+   appPackageId?: string;
+   appSignature?: string;
+   pollingIntervalMs?: number;
+   maxPollAttempts?: number;
+}
+
+export interface SDKTextConfig {
+   welcomeTitle?: string;
+   welcomeSubtitle?: string;
+   startButtonLabel?: string;
+   startOVSEButtonLabel?: string;
+   cancelButtonLabel?: string;
+   ovseTitle?: string;
+   ovseSubtitle?: string;
+   ovseInputLabel?: string;
+   ovseInputPlaceholder?: string;
+   ovseSubmitLabel?: string;
 }
 
 export interface VKYCTheme {

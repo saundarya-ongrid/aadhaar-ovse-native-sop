@@ -44,22 +44,46 @@ class ViewController: UIViewController {
     // MARK: - Example 1: Basic Integration with Completion Handler
     
     @objc private func startVKYCTapped() {
-        // Create configuration
+        startOVSE()
+    }
+
+    // Minimal OVSE-only integration sample
+    private func startOVSE() {
         let config = VKYCConfig(
-            token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-            apiKey: "your-api-key-here",
-            environment: .staging
+            apiKey: "YOUR_GRIDLINES_API_KEY",
+            environment: .staging,
+            mode: .ovse
         )
-        
-        // Start VKYC
+
+        config.ovse = VKYCOVSEOptions(
+            apiBaseUrl: "https://api-dev.gridlines.io/uidai-api/ovse",
+            apiKey: "YOUR_GRIDLINES_API_KEY",
+            initialApiKey: "YOUR_GRIDLINES_API_KEY",
+            channelType: "APP",
+            templateId: "1",
+            expiryTimeInSeconds: 3600,
+            consent: "Y",
+            appPackageId: "in.ongrid.lav",
+            appSignature: "DZ54P8HK5D",
+            pollingIntervalMs: 5000,
+            maxPollAttempts: 60
+        )
+
+        config.texts = VKYCTextOptions(
+            welcomeTitle: "Aadhaar OVSE",
+            welcomeSubtitle: "Secure verification powered by OnGrid",
+            startButtonLabel: "Start OVSE",
+            ovseTitle: "Aadhaar OVSE Verification",
+            ovseInputLabel: "API Key",
+            ovseSubmitLabel: "Start Flow"
+        )
+
         VKYCManager.start(from: self, config: config) { result in
             switch result {
             case .success(let data):
                 self.handleSuccess(data)
-                
             case .failure(let error):
                 self.handleError(error)
-                
             case .cancelled:
                 self.handleCancellation()
             }

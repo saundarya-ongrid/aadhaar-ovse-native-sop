@@ -8,13 +8,21 @@ package com.vkyc.sdk
  * @property environment Environment (STAGING or PRODUCTION)
  */
 data class VKYCConfig(
-    val token: String,
+    val token: String = "",
     val apiKey: String,
-    val environment: Environment = Environment.STAGING
+    val environment: Environment = Environment.STAGING,
+    val mode: Mode = Mode.VKYC
 ) {
     var theme: Theme? = null
     var features: Features? = null
+    var ovse: OVSE? = null
+    var texts: Texts? = null
     var metadata: Map<String, Any>? = null
+
+    enum class Mode(val value: String) {
+        VKYC("vkyc"),
+        OVSE("ovse")
+    }
     
     /**
      * Environment configuration
@@ -48,6 +56,39 @@ data class VKYCConfig(
         val audioEnabled: Boolean? = true,
         val screenRecording: Boolean? = false
     )
+
+    /**
+     * OVSE-specific runtime options
+     */
+    data class OVSE(
+        val apiBaseUrl: String? = null,
+        val apiKey: String? = null,
+        val initialApiKey: String? = null,
+        val channelType: String? = "APP",
+        val templateId: String? = "1",
+        val expiryTimeInSeconds: Int? = 3600,
+        val consent: String? = "Y",
+        val appPackageId: String? = null,
+        val appSignature: String? = null,
+        val pollingIntervalMs: Int? = 5000,
+        val maxPollAttempts: Int? = 60
+    )
+
+    /**
+     * Host app text overrides for white-labeled UI
+     */
+    data class Texts(
+        val welcomeTitle: String? = null,
+        val welcomeSubtitle: String? = null,
+        val startButtonLabel: String? = null,
+        val startOVSEButtonLabel: String? = null,
+        val cancelButtonLabel: String? = null,
+        val ovseTitle: String? = null,
+        val ovseSubtitle: String? = null,
+        val ovseInputLabel: String? = null,
+        val ovseInputPlaceholder: String? = null,
+        val ovseSubmitLabel: String? = null
+    )
     
     /**
      * Convert config to Bundle for passing to React Native
@@ -57,6 +98,7 @@ data class VKYCConfig(
             putString("token", token)
             putString("apiKey", apiKey)
             putString("environment", environment.value)
+            putString("mode", mode.value)
             
             // Theme
             theme?.let { themeConfig ->
@@ -100,6 +142,41 @@ data class VKYCConfig(
                 }
                 putBundle("metadata", metadataBundle)
             }
+
+            // OVSE
+            ovse?.let { ovseConfig ->
+                val ovseBundle = android.os.Bundle().apply {
+                    ovseConfig.apiBaseUrl?.let { putString("apiBaseUrl", it) }
+                    ovseConfig.apiKey?.let { putString("apiKey", it) }
+                    ovseConfig.initialApiKey?.let { putString("initialApiKey", it) }
+                    ovseConfig.channelType?.let { putString("channelType", it) }
+                    ovseConfig.templateId?.let { putString("templateId", it) }
+                    ovseConfig.expiryTimeInSeconds?.let { putInt("expiryTimeInSeconds", it) }
+                    ovseConfig.consent?.let { putString("consent", it) }
+                    ovseConfig.appPackageId?.let { putString("appPackageId", it) }
+                    ovseConfig.appSignature?.let { putString("appSignature", it) }
+                    ovseConfig.pollingIntervalMs?.let { putInt("pollingIntervalMs", it) }
+                    ovseConfig.maxPollAttempts?.let { putInt("maxPollAttempts", it) }
+                }
+                putBundle("ovse", ovseBundle)
+            }
+
+            // Texts
+            texts?.let { textConfig ->
+                val textsBundle = android.os.Bundle().apply {
+                    textConfig.welcomeTitle?.let { putString("welcomeTitle", it) }
+                    textConfig.welcomeSubtitle?.let { putString("welcomeSubtitle", it) }
+                    textConfig.startButtonLabel?.let { putString("startButtonLabel", it) }
+                    textConfig.startOVSEButtonLabel?.let { putString("startOVSEButtonLabel", it) }
+                    textConfig.cancelButtonLabel?.let { putString("cancelButtonLabel", it) }
+                    textConfig.ovseTitle?.let { putString("ovseTitle", it) }
+                    textConfig.ovseSubtitle?.let { putString("ovseSubtitle", it) }
+                    textConfig.ovseInputLabel?.let { putString("ovseInputLabel", it) }
+                    textConfig.ovseInputPlaceholder?.let { putString("ovseInputPlaceholder", it) }
+                    textConfig.ovseSubmitLabel?.let { putString("ovseSubmitLabel", it) }
+                }
+                putBundle("texts", textsBundle)
+            }
         }
     }
     
@@ -109,11 +186,12 @@ data class VKYCConfig(
     fun validate(): ValidationResult {
         val errors = mutableListOf<String>()
         
-        if (token.isBlank()) {
+        if (mode != Mode.OVSE && token.isBlank()) {
             errors.add("Token cannot be empty")
         }
         
-        if (apiKey.isBlank()) {
+        val resolvedApiKey = ovse?.apiKey ?: apiKey
+        if (resolvedApiKey.isBlank()) {
             errors.add("API Key cannot be empty")
         }
         

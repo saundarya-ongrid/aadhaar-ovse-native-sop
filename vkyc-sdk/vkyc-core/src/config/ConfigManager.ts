@@ -3,7 +3,7 @@
  * Handles VKYC configuration passed from native wrappers
  */
 
-import { VKYCConfig, VKYCFeatures, VKYCTheme } from "../types";
+import { OVSEConfig, SDKTextConfig, VKYCConfig, VKYCFeatures, VKYCTheme } from "../types";
 
 class ConfigManager {
    private config: VKYCConfig | null = null;
@@ -22,6 +22,9 @@ class ConfigManager {
          token: props.token,
          apiKey: props.apiKey,
          environment: props.environment || "staging",
+         mode: props.mode || "vkyc",
+         ovse: this.parseOvse(props.ovse, props),
+         texts: this.parseTexts(props.texts),
          theme: this.parseTheme(props.theme),
          features: this.parseFeatures(props.features),
          metadata: props.metadata || {},
@@ -86,6 +89,10 @@ class ConfigManager {
     * Get API base URL based on environment
     */
    getApiBaseUrl(): string {
+      if (this.config?.mode === "ovse" && this.config.ovse?.apiBaseUrl) {
+         return this.config.ovse.apiBaseUrl;
+      }
+
       const environment = this.get("environment");
 
       if (environment === "production") {
@@ -93,6 +100,47 @@ class ConfigManager {
       } else {
          return "https://api-staging.vkyc.com/v1";
       }
+   }
+
+   /**
+    * Parse OVSE options from props
+    */
+   private parseOvse(ovse: any, props: any): OVSEConfig | undefined {
+      if (!ovse && props.mode !== "ovse") return undefined;
+
+      return {
+         apiBaseUrl: ovse?.apiBaseUrl,
+         apiKey: ovse?.apiKey || props.apiKey,
+         initialApiKey: ovse?.initialApiKey,
+         channelType: ovse?.channelType || "APP",
+         templateId: ovse?.templateId || "1",
+         expiryTimeInSeconds: ovse?.expiryTimeInSeconds || 3600,
+         consent: ovse?.consent || "Y",
+         appPackageId: ovse?.appPackageId,
+         appSignature: ovse?.appSignature,
+         pollingIntervalMs: ovse?.pollingIntervalMs || 5000,
+         maxPollAttempts: ovse?.maxPollAttempts || 60,
+      };
+   }
+
+   /**
+    * Parse UI text customizations from props
+    */
+   private parseTexts(texts: any): SDKTextConfig | undefined {
+      if (!texts) return undefined;
+
+      return {
+         welcomeTitle: texts.welcomeTitle,
+         welcomeSubtitle: texts.welcomeSubtitle,
+         startButtonLabel: texts.startButtonLabel,
+         startOVSEButtonLabel: texts.startOVSEButtonLabel,
+         cancelButtonLabel: texts.cancelButtonLabel,
+         ovseTitle: texts.ovseTitle,
+         ovseSubtitle: texts.ovseSubtitle,
+         ovseInputLabel: texts.ovseInputLabel,
+         ovseInputPlaceholder: texts.ovseInputPlaceholder,
+         ovseSubmitLabel: texts.ovseSubmitLabel,
+      };
    }
 
    /**
@@ -172,16 +220,21 @@ class ConfigManager {
          throw new Error("Configuration is null");
       }
 
-      if (!this.config.token || this.config.token.trim() === "") {
+      if (this.config.mode !== "ovse" && (!this.config.token || this.config.token.trim() === "")) {
          throw new Error("Token is required");
       }
 
-      if (!this.config.apiKey || this.config.apiKey.trim() === "") {
+      const resolvedApiKey = this.config.ovse?.apiKey || this.config.apiKey;
+      if (!resolvedApiKey || resolvedApiKey.trim() === "") {
          throw new Error("API Key is required");
       }
 
       if (!["staging", "production"].includes(this.config.environment)) {
          throw new Error("Environment must be staging or production");
+      }
+
+      if (this.config.mode && !["vkyc", "ovse"].includes(this.config.mode)) {
+         throw new Error("Mode must be vkyc or ovse");
       }
 
       // Validate theme colors if provided

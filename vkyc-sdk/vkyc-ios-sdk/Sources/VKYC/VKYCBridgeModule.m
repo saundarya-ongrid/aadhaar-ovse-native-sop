@@ -6,6 +6,7 @@
 //  Copyright © 2026 VKYC. All rights reserved.
 //
 
+#if __has_include(<React/RCTBridgeModule.h>)
 #import <React/RCTBridgeModule.h>
 
 @interface RCT_EXTERN_MODULE(VKYCModule, NSObject)
@@ -35,3 +36,9 @@ RCT_EXTERN_METHOD(getSDKVersion:(RCTResponseSenderBlock)callback)
 RCT_EXTERN_METHOD(isDebugMode:(RCTResponseSenderBlock)callback)
 
 @end
+
+#else
+
+// No-op in environments where React headers are unavailable.
+
+#endif

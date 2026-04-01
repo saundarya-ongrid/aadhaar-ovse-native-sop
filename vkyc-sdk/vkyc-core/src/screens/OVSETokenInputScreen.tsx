@@ -15,7 +15,9 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useDispatch } from "react-redux";
+import ConfigManager from "../config/ConfigManager";
 import OVSEAPIService from "../services/OVSEAPIService";
 import { setError, setLoading } from "../store";
 import ThemeManager from "../theme/ThemeManager";
@@ -28,7 +30,10 @@ const OVSETokenInputScreen: React.FC = () => {
    const commonStyles = ThemeManager.getCommonStyles();
    const colors = ThemeManager.getColors();
 
-   const [token, setToken] = useState("");
+   const config = ConfigManager.getConfig();
+   const ovseConfig = config.ovse;
+   const texts = config.texts || {};
+   const [apiKey, setApiKey] = useState(ovseConfig?.initialApiKey || ovseConfig?.apiKey || config.apiKey || "");
    const [isSubmitting, setIsSubmitting] = useState(false);
 
    React.useEffect(() => {
@@ -36,52 +41,32 @@ const OVSETokenInputScreen: React.FC = () => {
    }, []);
 
    const handleSubmit = async () => {
-      if (!token.trim()) {
+      if (!apiKey.trim()) {
          dispatch(
             setError({
                code: ErrorCode.INVALID_CONFIG,
-               message: "Please enter a valid token",
+               message: "Please enter a valid API key",
             }),
          );
          return;
       }
 
-      NativeBridge.trackButtonClick("submit_token", "OVSETokenInput");
+      NativeBridge.trackButtonClick("submit_ovse", "OVSETokenInput");
 
       try {
          setIsSubmitting(true);
          dispatch(setLoading(true));
 
-         // Step 1: Initiate session
-         NativeBridge.onEvent("ovse_session_initiating", { token });
-         const sessionResponse = await OVSEAPIService.initiateSession(token);
+         const channelType = ovseConfig?.channelType || "APP";
+         NativeBridge.onEvent("ovse_generate_token", { channelType });
 
-         if (!sessionResponse.data?.sessionId) {
-            throw new Error("Session ID not received");
-         }
+         const tokenResponse = await OVSEAPIService.generateToken(apiKey.trim(), channelType);
+         const transaction_id = tokenResponse.data?.transaction_id;
+         const jwt_token = tokenResponse.data?.scan_uri || tokenResponse.data?.jwt_token;
 
-         const { sessionId, authorization } = sessionResponse.data;
-
-         NativeBridge.onEvent("ovse_session_initiated", {
-            sessionId,
-            hasAuthorization: !!authorization,
-         });
-
-         // Step 2: Set KYC method
-         NativeBridge.onEvent("ovse_kyc_method_setting", { sessionId });
-         await OVSEAPIService.setKYCMethod(sessionId);
-
-         NativeBridge.onEvent("ovse_kyc_method_set", { sessionId });
-
-         // Step 3: Generate intent
-         NativeBridge.onEvent("ovse_intent_generating", { sessionId });
-         const intentResponse = await OVSEAPIService.generateIntent(sessionId);
-
-         if (!intentResponse.data?.jwt_token || !intentResponse.data?.transaction_id) {
+         if (!jwt_token || !transaction_id) {
             throw new Error("JWT token or transaction ID not received");
          }
-
-         const { jwt_token, transaction_id } = intentResponse.data;
 
          NativeBridge.onEvent("ovse_intent_generated", {
             transactionId: transaction_id,
@@ -89,7 +74,7 @@ const OVSETokenInputScreen: React.FC = () => {
 
          // Navigate to processing screen with data
          (navigation as any).navigate("OVSEProcessing", {
-            sessionId,
+            apiKey: apiKey.trim(),
             transactionId: transaction_id,
             jwtToken: jwt_token,
          });
@@ -116,84 +101,124 @@ const OVSETokenInputScreen: React.FC = () => {
    };
 
    return (
-      <KeyboardAvoidingView
-         style={commonStyles.centerContainer}
-         behavior={Platform.OS === "ios" ? "padding" : "height"}
-      >
-         <View style={styles.content}>
-            <Text style={commonStyles.title}>Aadhaar OVSE Verification</Text>
-            <Text style={commonStyles.subtitle}>Enter your verification token to begin the process</Text>
-
-            <View style={styles.inputContainer}>
-               <Text style={styles.inputLabel}>Verification Token</Text>
-               <TextInput
-                  style={[styles.input, { borderColor: colors.primary }]}
-                  value={token}
-                  onChangeText={setToken}
-                  placeholder="Enter token (e.g., DPYmAX)"
-                  placeholderTextColor="#999999"
-                  autoCapitalize="characters"
-                  autoCorrect={false}
-                  editable={!isSubmitting}
-               />
-            </View>
-
-            {isSubmitting ? (
-               <View style={styles.loadingContainer}>
-                  <ActivityIndicator size="large" color={colors.primary} />
-                  <Text style={styles.loadingText}>Processing token...</Text>
+      <SafeAreaView style={styles.safeArea}>
+         <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+            <View style={styles.content}>
+               <View style={styles.infoCard}>
+                  <Text style={styles.infoTitle}>Test Environment</Text>
+                  <Text style={styles.infoText}>API: api-dev.gridlines.io/uidai-api/ovse</Text>
+                  <Text style={styles.infoText}>Channel: APP (app-to-app)</Text>
+                  <Text style={styles.infoText}>Polling: 5s interval, 60 max attempts</Text>
                </View>
-            ) : (
-               <>
-                  <TouchableOpacity
-                     style={[commonStyles.button, !token.trim() && styles.buttonDisabled]}
-                     onPress={handleSubmit}
-                     disabled={!token.trim()}
-                     activeOpacity={0.8}
-                  >
-                     <Text style={commonStyles.buttonText}>Continue</Text>
-                  </TouchableOpacity>
 
-                  <TouchableOpacity
-                     style={[commonStyles.secondaryButton, styles.cancelButton]}
-                     onPress={handleCancel}
-                     activeOpacity={0.8}
-                  >
-                     <Text style={commonStyles.secondaryButtonText}>Cancel</Text>
-                  </TouchableOpacity>
-               </>
-            )}
-         </View>
-      </KeyboardAvoidingView>
+               <View style={styles.inputCard}>
+                  <Text style={styles.inputTitle}>{texts.ovseTitle || "Aadhaar OVSE Verification"}</Text>
+                  <Text style={styles.inputSubtitle}>
+                     {texts.ovseSubtitle || "Enter your API key to begin the verification process"}
+                  </Text>
+                  <Text style={styles.inputLabel}>{texts.ovseInputLabel || "API Key"}</Text>
+                  <TextInput
+                     style={styles.input}
+                     value={apiKey}
+                     onChangeText={setApiKey}
+                     placeholder={texts.ovseInputPlaceholder || "Enter API key"}
+                     placeholderTextColor="rgba(255, 255, 255, 0.5)"
+                     autoCapitalize="none"
+                     autoCorrect={false}
+                     editable={!isSubmitting}
+                  />
+               </View>
+
+               {isSubmitting ? (
+                  <View style={styles.loadingContainer}>
+                     <ActivityIndicator size="large" color={colors.primary} />
+                     <Text style={styles.loadingText}>Generating OVSE session...</Text>
+                  </View>
+               ) : (
+                  <>
+                     <TouchableOpacity
+                        style={[styles.primaryButton, !apiKey.trim() && styles.buttonDisabled]}
+                        onPress={handleSubmit}
+                        disabled={!apiKey.trim()}
+                        activeOpacity={0.8}
+                     >
+                        <Text style={styles.primaryButtonText}>{texts.ovseSubmitLabel || "Continue"}</Text>
+                     </TouchableOpacity>
+
+                     <TouchableOpacity style={styles.cancelButton} onPress={handleCancel} activeOpacity={0.8}>
+                        <Text style={styles.cancelButtonText}>Cancel</Text>
+                     </TouchableOpacity>
+                  </>
+               )}
+            </View>
+         </KeyboardAvoidingView>
+      </SafeAreaView>
    );
 };
 
 const styles = StyleSheet.create({
-   content: {
-      width: "100%",
-      maxWidth: 400,
-      alignItems: "center",
+   safeArea: {
+      flex: 1,
+      backgroundColor: "#667eea",
+   },
+   container: {
+      flex: 1,
+      backgroundColor: "#667eea",
+      justifyContent: "center",
       paddingHorizontal: 20,
    },
-   inputContainer: {
+   content: {
       width: "100%",
-      marginVertical: 32,
+   },
+   infoCard: {
+      backgroundColor: "rgba(255, 255, 255, 0.15)",
+      borderRadius: 16,
+      padding: 16,
+      marginBottom: 20,
+   },
+   infoTitle: {
+      color: "#fff",
+      fontSize: 16,
+      fontWeight: "700",
+      marginBottom: 8,
+   },
+   infoText: {
+      color: "rgba(255, 255, 255, 0.9)",
+      fontSize: 14,
+      marginBottom: 4,
+   },
+   inputCard: {
+      backgroundColor: "rgba(255, 255, 255, 0.15)",
+      borderRadius: 16,
+      padding: 16,
+      marginBottom: 20,
+   },
+   inputTitle: {
+      color: "#fff",
+      fontSize: 22,
+      fontWeight: "700",
+      marginBottom: 8,
+   },
+   inputSubtitle: {
+      color: "rgba(255, 255, 255, 0.9)",
+      fontSize: 14,
+      marginBottom: 16,
    },
    inputLabel: {
-      fontSize: 14,
+      color: "#fff",
+      fontSize: 16,
       fontWeight: "600",
-      color: "#1A202C",
       marginBottom: 8,
    },
    input: {
       width: "100%",
-      height: 56,
-      borderWidth: 2,
-      borderRadius: 8,
+      backgroundColor: "rgba(255, 255, 255, 0.2)",
+      borderRadius: 12,
       paddingHorizontal: 16,
       fontSize: 16,
-      color: "#1A202C",
-      backgroundColor: "#FFFFFF",
+      color: "#fff",
+      fontWeight: "600",
+      height: 56,
    },
    buttonDisabled: {
       opacity: 0.5,
@@ -205,10 +230,28 @@ const styles = StyleSheet.create({
    loadingText: {
       marginTop: 16,
       fontSize: 16,
-      color: "#4A5568",
+      color: "#fff",
+   },
+   primaryButton: {
+      backgroundColor: "#4facfe",
+      borderRadius: 16,
+      padding: 18,
+      alignItems: "center",
+   },
+   primaryButtonText: {
+      color: "#fff",
+      fontSize: 18,
+      fontWeight: "700",
    },
    cancelButton: {
       marginTop: 16,
+      alignItems: "center",
+      padding: 12,
+   },
+   cancelButtonText: {
+      color: "#fff",
+      fontSize: 14,
+      fontWeight: "600",
    },
 });
 

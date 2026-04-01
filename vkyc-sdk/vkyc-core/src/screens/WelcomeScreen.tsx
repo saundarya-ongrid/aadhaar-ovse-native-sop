@@ -6,6 +6,7 @@
 import { useNavigation } from "@react-navigation/native";
 import React from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import ConfigManager from "../config/ConfigManager";
 import ThemeManager from "../theme/ThemeManager";
 import NativeBridge from "../utils/NativeBridge";
 
@@ -13,6 +14,9 @@ const WelcomeScreen: React.FC = () => {
    const navigation = useNavigation();
    const commonStyles = ThemeManager.getCommonStyles();
    const colors = ThemeManager.getColors();
+   const config = ConfigManager.getConfig();
+   const texts = config.texts || {};
+   const mode = config.mode || "vkyc";
 
    React.useEffect(() => {
       NativeBridge.trackScreen("Welcome");
@@ -20,8 +24,11 @@ const WelcomeScreen: React.FC = () => {
 
    const handleStart = () => {
       NativeBridge.trackButtonClick("start", "Welcome");
-      // Navigate to next screen (DocumentCapture for now)
-      (navigation as any).navigate("DocumentCapture");
+      if (mode === "ovse") {
+         (navigation as any).navigate("OVSETokenInput");
+      } else {
+         (navigation as any).navigate("DocumentCapture");
+      }
    };
 
    const handleStartOVSE = () => {
@@ -38,52 +45,57 @@ const WelcomeScreen: React.FC = () => {
    return (
       <View style={commonStyles.centerContainer}>
          <View style={styles.content}>
-            <Text style={commonStyles.title}>Welcome to VKYC</Text>
+            <Text style={commonStyles.title}>{texts.welcomeTitle || "Welcome to VKYC"}</Text>
             <Text style={commonStyles.subtitle}>
-               We'll guide you through a quick video verification process to confirm your identity.
+               {texts.welcomeSubtitle ||
+                  "We'll guide you through a quick verification process to confirm your identity."}
             </Text>
 
-            <View style={styles.steps}>
-               <View style={styles.step}>
-                  <View style={[styles.stepNumber, { backgroundColor: colors.primary }]}>
-                     <Text style={styles.stepNumberText}>1</Text>
+            {mode !== "ovse" && (
+               <View style={styles.steps}>
+                  <View style={styles.step}>
+                     <View style={[styles.stepNumber, { backgroundColor: colors.primary }]}>
+                        <Text style={styles.stepNumberText}>1</Text>
+                     </View>
+                     <Text style={styles.stepText}>Capture your ID document</Text>
                   </View>
-                  <Text style={styles.stepText}>Capture your ID document</Text>
-               </View>
 
-               <View style={styles.step}>
-                  <View style={[styles.stepNumber, { backgroundColor: colors.primary }]}>
-                     <Text style={styles.stepNumberText}>2</Text>
+                  <View style={styles.step}>
+                     <View style={[styles.stepNumber, { backgroundColor: colors.primary }]}>
+                        <Text style={styles.stepNumberText}>2</Text>
+                     </View>
+                     <Text style={styles.stepText}>Take a selfie</Text>
                   </View>
-                  <Text style={styles.stepText}>Take a selfie</Text>
-               </View>
 
-               <View style={styles.step}>
-                  <View style={[styles.stepNumber, { backgroundColor: colors.primary }]}>
-                     <Text style={styles.stepNumberText}>3</Text>
+                  <View style={styles.step}>
+                     <View style={[styles.stepNumber, { backgroundColor: colors.primary }]}>
+                        <Text style={styles.stepNumberText}>3</Text>
+                     </View>
+                     <Text style={styles.stepText}>Complete liveness check</Text>
                   </View>
-                  <Text style={styles.stepText}>Complete liveness check</Text>
                </View>
-            </View>
+            )}
 
             <TouchableOpacity style={commonStyles.button} onPress={handleStart} activeOpacity={0.8}>
-               <Text style={commonStyles.buttonText}>Get Started</Text>
+               <Text style={commonStyles.buttonText}>{texts.startButtonLabel || "Get Started"}</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
-               style={[commonStyles.button, { backgroundColor: colors.primary, marginTop: 12 }]}
-               onPress={handleStartOVSE}
-               activeOpacity={0.8}
-            >
-               <Text style={commonStyles.buttonText}>Start OVSE Verification</Text>
-            </TouchableOpacity>
+            {mode !== "ovse" && (
+               <TouchableOpacity
+                  style={[commonStyles.button, { backgroundColor: colors.primary, marginTop: 12 }]}
+                  onPress={handleStartOVSE}
+                  activeOpacity={0.8}
+               >
+                  <Text style={commonStyles.buttonText}>{texts.startOVSEButtonLabel || "Start OVSE Verification"}</Text>
+               </TouchableOpacity>
+            )}
 
             <TouchableOpacity
                style={[commonStyles.secondaryButton, styles.cancelButton]}
                onPress={handleCancel}
                activeOpacity={0.8}
             >
-               <Text style={commonStyles.secondaryButtonText}>Cancel</Text>
+               <Text style={commonStyles.secondaryButtonText}>{texts.cancelButtonLabel || "Cancel"}</Text>
             </TouchableOpacity>
          </View>
       </View>

@@ -6,38 +6,33 @@
 import { RouteProp, useRoute } from "@react-navigation/native";
 import React, { useEffect } from "react";
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import ThemeManager from "../theme/ThemeManager";
 import NativeBridge from "../utils/NativeBridge";
 
-type OVSEResultRouteProp = RouteProp<
-   { OVSEResult: { status: any; sessionId: string; transactionId: string } },
-   "OVSEResult"
->;
+type OVSEResultRouteProp = RouteProp<{ OVSEResult: { status: any; transactionId: string } }, "OVSEResult">;
 
 const OVSEResultScreen: React.FC = () => {
    const route = useRoute<OVSEResultRouteProp>();
-   const commonStyles = ThemeManager.getCommonStyles();
-   const colors = ThemeManager.getColors();
+   const { status, transactionId } = route.params || {};
 
-   const { status, sessionId, transactionId } = route.params || {};
-
-   const isSuccess = status?.code && status.code !== "CALLBACK_NOT_YET_RECEIVED";
-   const hasData = status?.data && Object.keys(status.data).length > 0;
+   const responseCode = status?.data?.code;
+   const responseMessage = status?.data?.message || status?.message;
+   const isSuccess = responseCode === "1001" || responseCode === 1001;
+   const resultData = status?.data?.ovse_data || status?.data;
+   const hasData = resultData && Object.keys(resultData).length > 0;
 
    useEffect(() => {
       NativeBridge.trackScreen("OVSEResult");
 
       if (isSuccess) {
          NativeBridge.onSuccess({
-            sessionId,
             transactionId,
-            code: status.code,
-            data: status.data,
+            code: responseCode,
+            data: resultData,
          });
       } else {
          NativeBridge.onFailure({
-            code: status?.code || "UNKNOWN",
-            message: status?.message || "Verification failed",
+            code: responseCode || "UNKNOWN",
+            message: responseMessage || "Verification failed",
          });
       }
    }, []);
@@ -48,41 +43,32 @@ const OVSEResultScreen: React.FC = () => {
    };
 
    return (
-      <ScrollView style={commonStyles.centerContainer} contentContainerStyle={styles.scrollContent}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
          <View style={styles.content}>
             <View
                style={[
                   styles.statusIcon,
                   {
-                     backgroundColor: isSuccess ? colors.success + "20" : colors.error + "20",
+                     backgroundColor: isSuccess ? "rgba(81, 207, 102, 0.2)" : "rgba(255, 107, 107, 0.2)",
                   },
                ]}
             >
-               <Text style={styles.checkmark}>{isSuccess ? "✓" : "✕"}</Text>
+               <Text style={[styles.checkmark, !isSuccess && styles.checkmarkError]}>{isSuccess ? "✓" : "✕"}</Text>
             </View>
 
-            <Text style={commonStyles.title}>{isSuccess ? "Verification Complete" : "Verification Status"}</Text>
-            <Text style={commonStyles.subtitle}>{status?.message || "No message"}</Text>
+            <Text style={styles.title}>{isSuccess ? "Verification Complete" : "Verification Status"}</Text>
+            <Text style={styles.subtitle}>{responseMessage || "No message"}</Text>
 
-            {/* Status Code */}
             <View style={styles.detailsContainer}>
                <Text style={styles.detailLabel}>Status Code:</Text>
-               <Text style={[styles.detailValue, styles.codeText]}>{status?.code || "N/A"}</Text>
+               <Text style={[styles.detailValue, styles.codeText]}>{responseCode || "N/A"}</Text>
             </View>
 
-            {/* Session ID */}
-            <View style={styles.detailsContainer}>
-               <Text style={styles.detailLabel}>Session ID:</Text>
-               <Text style={styles.detailValue}>{sessionId}</Text>
-            </View>
-
-            {/* Transaction ID */}
             <View style={styles.detailsContainer}>
                <Text style={styles.detailLabel}>Transaction ID:</Text>
                <Text style={styles.detailValue}>{transactionId}</Text>
             </View>
 
-            {/* Request ID */}
             {status?.request_id && (
                <View style={styles.detailsContainer}>
                   <Text style={styles.detailLabel}>Request ID:</Text>
@@ -90,18 +76,17 @@ const OVSEResultScreen: React.FC = () => {
                </View>
             )}
 
-            {/* Response Data */}
             {hasData && (
                <View style={styles.dataContainer}>
                   <Text style={styles.dataLabel}>Response Data:</Text>
                   <View style={styles.dataBox}>
-                     <Text style={styles.dataText}>{JSON.stringify(status.data, null, 2)}</Text>
+                     <Text style={styles.dataText}>{JSON.stringify(resultData, null, 2)}</Text>
                   </View>
                </View>
             )}
 
-            <TouchableOpacity style={[commonStyles.button, styles.doneButton]} onPress={handleDone} activeOpacity={0.8}>
-               <Text style={commonStyles.buttonText}>Done</Text>
+            <TouchableOpacity style={styles.doneButton} onPress={handleDone} activeOpacity={0.8}>
+               <Text style={styles.doneButtonText}>Done</Text>
             </TouchableOpacity>
          </View>
       </ScrollView>
@@ -109,11 +94,15 @@ const OVSEResultScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
+   container: {
+      flex: 1,
+      backgroundColor: "#667eea",
+   },
    scrollContent: {
       flexGrow: 1,
       justifyContent: "center",
       alignItems: "center",
-      paddingVertical: 40,
+      paddingVertical: 24,
    },
    content: {
       width: "100%",
@@ -134,16 +123,31 @@ const styles = StyleSheet.create({
       color: "#48BB78",
       fontWeight: "700",
    },
+   checkmarkError: {
+      color: "#ff6b6b",
+   },
+   title: {
+      color: "#fff",
+      fontSize: 24,
+      fontWeight: "700",
+      textAlign: "center",
+      marginBottom: 8,
+   },
+   subtitle: {
+      color: "rgba(255, 255, 255, 0.9)",
+      textAlign: "center",
+      marginBottom: 10,
+   },
    detailsContainer: {
       marginTop: 20,
       padding: 16,
-      backgroundColor: "#F7FAFC",
-      borderRadius: 8,
+      backgroundColor: "rgba(255, 255, 255, 0.15)",
+      borderRadius: 12,
       width: "100%",
    },
    detailLabel: {
       fontSize: 12,
-      color: "#718096",
+      color: "rgba(255, 255, 255, 0.7)",
       marginBottom: 4,
       textTransform: "uppercase",
       letterSpacing: 0.5,
@@ -151,12 +155,12 @@ const styles = StyleSheet.create({
    },
    detailValue: {
       fontSize: 14,
-      color: "#1A202C",
+      color: "#fff",
       fontWeight: "600",
       fontFamily: "monospace",
    },
    codeText: {
-      color: "#2D3748",
+      color: "#ffd43b",
       fontSize: 16,
    },
    dataContainer: {
@@ -165,7 +169,7 @@ const styles = StyleSheet.create({
    },
    dataLabel: {
       fontSize: 12,
-      color: "#718096",
+      color: "rgba(255, 255, 255, 0.7)",
       marginBottom: 8,
       textTransform: "uppercase",
       letterSpacing: 0.5,
@@ -173,9 +177,9 @@ const styles = StyleSheet.create({
    },
    dataBox: {
       padding: 16,
-      backgroundColor: "#2D3748",
-      borderRadius: 8,
-      maxHeight: 200,
+      backgroundColor: "rgba(0, 0, 0, 0.65)",
+      borderRadius: 12,
+      maxHeight: 220,
    },
    dataText: {
       fontSize: 12,
@@ -185,6 +189,15 @@ const styles = StyleSheet.create({
    },
    doneButton: {
       marginTop: 32,
+      backgroundColor: "#4facfe",
+      borderRadius: 12,
+      paddingVertical: 14,
+      paddingHorizontal: 36,
+   },
+   doneButtonText: {
+      color: "#fff",
+      fontWeight: "700",
+      fontSize: 16,
    },
 });
 

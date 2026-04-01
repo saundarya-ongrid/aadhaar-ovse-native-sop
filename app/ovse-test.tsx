@@ -85,8 +85,9 @@ class OVSEAPIService {
          // SHA-256 from debug keystore
          return {
             app_package_id: "in.ongrid.lav", // Registered with UIDAI
-            app_signature:
-               "B7:AA:EF:85:9B:8A:77:15:10:D2:43:63:39:E4:75:07:4E:AA:77:D1:2E:A6:6A:47:B7:FE:08:7E:5C:24:C4:3C", // SHA-256 debug keystore
+            // asig must be Base64 of the raw SHA-256 certificate bytes (NOT colon-hex fingerprint)
+            // Derived from: SHA-256 FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C
+            app_signature: "+sYXRdwJA3hvue3mKpYrOZ9zSPC7b4mbgzJmdZEDO5w=", // Base64(SHA-256 bytes) - what UIDAI/Aadhaar verifies
          };
       } else {
          // iOS: MUST match actual Bundle ID in Xcode

@@ -1,0 +1,30 @@
+require_relative '../../../../node_modules/react-native/scripts/react_native_pods'
+
+platform :ios, '15.1'
+
+prepare_react_native_project!
+
+react_native_path = '../../../../node_modules/react-native'
+
+target 'VKYCIOSHostExample_Example' do
+  use_frameworks! :linkage => :static
+
+  use_react_native!(
+    :path => react_native_path,
+    :app_path => "#{Pod::Config.instance.installation_root}/.."
+  )
+
+  pod 'VKYC', :path => '../../../vkyc-ios-sdk'
+
+  target 'VKYCIOSHostExample_Tests' do
+    inherit! :search_paths
+  end
+
+  post_install do |installer|
+    react_native_post_install(
+      installer,
+      react_native_path,
+      :mac_catalyst_enabled => false
+    )
+  end
+end

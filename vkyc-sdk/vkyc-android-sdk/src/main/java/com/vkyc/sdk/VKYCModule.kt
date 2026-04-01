@@ -109,6 +109,8 @@ class VKYCModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaMo
             val intent = Intent().apply {
                 action = "in.gov.uidai.pehchaan.INTENT_REQUEST"
                 putExtra("request", jwtToken)
+                addCategory(Intent.CATEGORY_DEFAULT)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             
             // Check if the Aadhaar app is installed

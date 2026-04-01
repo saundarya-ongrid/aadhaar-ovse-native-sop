@@ -1,178 +1,136 @@
 /**
  * OVSE API Service
- * Handles all API calls for Aadhaar OVSE verification
+ * Handles Gridlines OVSE API calls for Aadhaar verification
  */
 
-import axios, { AxiosInstance } from "axios";
+import ConfigManager from "../config/ConfigManager";
 
-const BASE_URL = "https://d29vza544ghj85.cloudfront.net/api/integration";
+const BASE_URL = "https://api-dev.gridlines.io/uidai-api/ovse";
 
-interface InitiateSessionResponse {
-   data: {
-      authorization: string;
-      sessionId: string;
-      status: string;
-   };
-   message: string;
-   request_id: string;
-   status: string;
-}
-
-interface KYCMethodResponse {
-   message: string;
-   request_id: string;
-   status: string;
-}
-
-interface GenerateIntentResponse {
-   code: string;
+interface GenerateTokenResponse {
+   status: number;
    data: {
       jwt_token: string;
+      scan_uri?: string;
       transaction_id: string;
       expires_at: number;
    };
-   message: string;
-   request_id: string;
-   status: string;
 }
 
 interface StatusResponse {
-   code: string;
+   status?: number;
    data: any;
-   message: string;
-   request_id: string;
-   status: string;
 }
 
 class OVSEAPIService {
-   private client: AxiosInstance;
+   private getBaseUrl(): string {
+      return ConfigManager.get("ovse")?.apiBaseUrl || BASE_URL;
+   }
 
-   constructor() {
-      this.client = axios.create({
-         baseURL: BASE_URL,
-         timeout: 30000,
+   /**
+    * Parse API response safely
+    */
+   private async parseResponse(response: Response) {
+      const text = await response.text();
+      if (!text || text.trim() === "") {
+         throw new Error(`Empty response from server (Status: ${response.status})`);
+      }
+      try {
+         return JSON.parse(text);
+      } catch {
+         throw new Error(`Invalid JSON response: ${text.substring(0, 120)}`);
+      }
+   }
+
+   /**
+    * Resolve app identifiers from SDK config or defaults
+    */
+   private getAppIdentifiers() {
+      const ovse = ConfigManager.get("ovse");
+      return {
+         app_package_id: ovse?.appPackageId || "in.ongrid.lav",
+         app_signature: ovse?.appSignature || "",
+      };
+   }
+
+   /**
+    * Step 1: Generate token for APP/WEB flow
+    */
+   async generateToken(apiKey: string, channelType: "APP" | "WEB" = "APP"): Promise<GenerateTokenResponse> {
+      const ovseConfig = ConfigManager.get("ovse");
+      const { app_package_id, app_signature } = this.getAppIdentifiers();
+
+      const body: any = {
+         channel_type: channelType,
+         template_id: ovseConfig?.templateId || "1",
+         expiry_time_in_seconds: ovseConfig?.expiryTimeInSeconds || 3600,
+         consent: ovseConfig?.consent || "Y",
+      };
+
+      if (channelType === "APP") {
+         body.app_package_id = app_package_id;
+         body.app_signature = app_signature;
+      }
+
+      const response = await fetch(`${this.getBaseUrl()}/generate-token`, {
+         method: "POST",
          headers: {
             "Content-Type": "application/json",
+            Accept: "application/json",
+            "X-API-Key": apiKey,
+            "X-Auth-Type": "Api-Key",
+            "X-GLN-Source": "API",
+         },
+         body: JSON.stringify(body),
+      });
+
+      const parsed = await this.parseResponse(response);
+      if (!response.ok) {
+         throw new Error(parsed?.message || `Generate token failed with status ${response.status}`);
+      }
+      return parsed;
+   }
+
+   /**
+    * Step 2: Poll transaction status
+    */
+   async checkStatus(apiKey: string, transactionId: string): Promise<StatusResponse> {
+      const response = await fetch(`${this.getBaseUrl()}/status`, {
+         method: "GET",
+         headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "X-API-Key": apiKey,
+            "X-Auth-Type": "Api-Key",
+            "X-GLN-Source": "API",
+            "X-Transaction-ID": transactionId,
          },
       });
 
-      // Request interceptor
-      this.client.interceptors.request.use(
-         (config: any) => {
-            console.log("[OVSE API] Request:", config.method?.toUpperCase(), config.url);
-            return config;
-         },
-         (error: any) => {
-            console.error("[OVSE API] Request error:", error);
-            return Promise.reject(error);
-         },
-      );
-
-      // Response interceptor
-      this.client.interceptors.response.use(
-         (response: any) => {
-            console.log("[OVSE API] Response:", response.status, response.config.url);
-            return response;
-         },
-         (error: any) => {
-            console.error("[OVSE API] Response error:", error.response?.data || error.message);
-            return Promise.reject(error);
-         },
-      );
-   }
-
-   /**
-    * Step 1: Initiate session with token
-    */
-   async initiateSession(token: string): Promise<InitiateSessionResponse> {
-      try {
-         const response = await this.client.post<InitiateSessionResponse>("/initiate/session", { token });
-
-         if (response.data.status === "success") {
-            return response.data;
-         } else {
-            throw new Error(response.data.message || "Failed to initiate session");
-         }
-      } catch (error: any) {
-         console.error("[OVSE API] Initiate session failed:", error);
-         throw new Error(error.response?.data?.message || error.message || "Session initiation failed");
+      const parsed = await this.parseResponse(response);
+      if (!response.ok) {
+         throw new Error(parsed?.message || `Status check failed with status ${response.status}`);
       }
-   }
-
-   /**
-    * Step 2: Set KYC method
-    */
-   async setKYCMethod(sessionId: string, method: string = "aadhaarovse"): Promise<KYCMethodResponse> {
-      try {
-         const response = await this.client.post<KYCMethodResponse>("/customer/kyc/method", { sessionId, method });
-
-         if (response.data.status === "success") {
-            return response.data;
-         } else {
-            throw new Error(response.data.message || "Failed to set KYC method");
-         }
-      } catch (error: any) {
-         console.error("[OVSE API] Set KYC method failed:", error);
-         throw new Error(error.response?.data?.message || error.message || "Setting KYC method failed");
-      }
-   }
-
-   /**
-    * Step 3: Generate JWT intent token
-    */
-   async generateIntent(customerSessionId: string, channel: string = "WEB"): Promise<GenerateIntentResponse> {
-      try {
-         const response = await this.client.post<GenerateIntentResponse>("/ovse/generate-intent", {
-            customer_session_id: customerSessionId,
-            channel,
-         });
-
-         if (response.data.status === "success") {
-            return response.data;
-         } else {
-            throw new Error(response.data.message || "Failed to generate intent");
-         }
-      } catch (error: any) {
-         console.error("[OVSE API] Generate intent failed:", error);
-         throw new Error(error.response?.data?.message || error.message || "Intent generation failed");
-      }
-   }
-
-   /**
-    * Step 4: Poll status
-    */
-   async checkStatus(customerSessionId: string, transactionId: string): Promise<StatusResponse> {
-      try {
-         const response = await this.client.post<StatusResponse>("/ovse/status", {
-            customer_session_id: customerSessionId,
-            transaction_id: transactionId,
-         });
-
-         return response.data;
-      } catch (error: any) {
-         console.error("[OVSE API] Check status failed:", error);
-         throw new Error(error.response?.data?.message || error.message || "Status check failed");
-      }
+      return parsed;
    }
 
    /**
     * Poll status until callback received or timeout
     */
    async pollStatus(
-      customerSessionId: string,
+      apiKey: string,
       transactionId: string,
-      maxAttempts: number = 60, // 5 minutes at 5-second intervals
+      maxAttempts: number = 60,
       intervalMs: number = 5000,
    ): Promise<StatusResponse> {
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
-         const status = await this.checkStatus(customerSessionId, transactionId);
+         const status = await this.checkStatus(apiKey, transactionId);
 
-         // Check if callback received
-         if (status.code !== "CALLBACK_NOT_YET_RECEIVED") {
+         // Success is marked by code 1001 in current OVSE contract.
+         if (status?.data?.code === "1001" || status?.data?.code === 1001) {
             return status;
          }
 
-         // Wait before next attempt
          if (attempt < maxAttempts - 1) {
             await new Promise<void>((resolve) => setTimeout(resolve, intervalMs));
          }
