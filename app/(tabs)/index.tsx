@@ -2,16 +2,16 @@ import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useRef, useState } from "react";
 import {
-  ActivityIndicator,
-  Dimensions,
-  KeyboardAvoidingView,
-  Platform,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+   ActivityIndicator,
+   Dimensions,
+   KeyboardAvoidingView,
+   Platform,
+   StatusBar,
+   StyleSheet,
+   Text,
+   TextInput,
+   TouchableOpacity,
+   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
@@ -220,7 +220,6 @@ export default function HomeScreen() {
                            allowUniversalAccessFromFileURLs={true}
                            allowFileAccessFromFileURLs={true}
                            setSupportMultipleWindows={false}
-                           userAgent="Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
                            onLoadStart={() => {
                               console.log("WebView started loading:", webViewUrl);
                               setIsLoading(true);
