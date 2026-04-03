@@ -5,6 +5,8 @@ import {
    ActivityIndicator,
    Dimensions,
    KeyboardAvoidingView,
+   Linking,
+   NativeModules,
    Platform,
    StatusBar,
    StyleSheet,
@@ -17,6 +19,99 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 
 const { height, width } = Dimensions.get("window");
+const { OvseModule } = NativeModules;
+
+const extractAadhaarTokenFromUrl = (targetUrl: string): string => {
+   if (!targetUrl) {
+      return "";
+   }
+
+   try {
+      // UIDAI web intent format
+      if (targetUrl.startsWith("intent:#Intent;")) {
+         const requestMatch = targetUrl.match(/S\.request=([^;]+)/);
+         return requestMatch?.[1] ? decodeURIComponent(requestMatch[1]) : "";
+      }
+
+      // Aadhaar app custom scheme format
+      if (targetUrl.startsWith("pehchan://") || targetUrl.startsWith("pehchaan://")) {
+         const parsedUrl = new URL(targetUrl);
+         return parsedUrl.searchParams.get("req") || parsedUrl.searchParams.get("value") || "";
+      }
+
+      // HTTP URL carrying token in query params
+      if (targetUrl.startsWith("http://") || targetUrl.startsWith("https://")) {
+         const parsedUrl = new URL(targetUrl);
+         return parsedUrl.searchParams.get("req") || parsedUrl.searchParams.get("value") || "";
+      }
+   } catch {
+      return "";
+   }
+
+   return "";
+};
+
+const webIntentBridgeScript = `
+(function () {
+   var isAadhaarRedirect = function (u) {
+      return /^intent:/i.test(u) || /^pehchaan?:\/\//i.test(u);
+   };
+
+   var postRedirect = function (u) {
+      try {
+         window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'external_redirect',
+            url: u,
+         }));
+      } catch (e) {}
+   };
+
+   var originalOpen = window.open;
+   window.open = function (url) {
+      if (typeof url === 'string' && isAadhaarRedirect(url)) {
+         postRedirect(url);
+         return null;
+      }
+      return originalOpen ? originalOpen.apply(window, arguments) : null;
+   };
+
+   var originalAssign = window.location.assign;
+   window.location.assign = function (url) {
+      if (typeof url === 'string' && isAadhaarRedirect(url)) {
+         postRedirect(url);
+         return;
+      }
+      return originalAssign.call(window.location, url);
+   };
+
+   var originalReplace = window.location.replace;
+   window.location.replace = function (url) {
+      if (typeof url === 'string' && isAadhaarRedirect(url)) {
+         postRedirect(url);
+         return;
+      }
+      return originalReplace.call(window.location, url);
+   };
+
+   document.addEventListener('click', function (event) {
+      var el = event.target;
+      while (el && el.tagName !== 'A') {
+         el = el.parentElement;
+      }
+
+      if (!el) {
+         return;
+      }
+
+      var href = el.getAttribute('href') || '';
+      if (isAadhaarRedirect(href)) {
+         event.preventDefault();
+         postRedirect(href);
+      }
+   }, true);
+})();
+true;
+`;
 
 export default function HomeScreen() {
    const [selectedMode, setSelectedMode] = useState<"landing" | "webview" | "native">("landing");
@@ -25,6 +120,37 @@ export default function HomeScreen() {
    const [loadingError, setLoadingError] = useState("");
    const [isLoading, setIsLoading] = useState(false);
    const webViewRef = useRef<WebView>(null);
+
+   const openExternalRedirect = async (targetUrl: string) => {
+      try {
+         // Launch through native Intent on Android whenever token is available.
+         if (Platform.OS === "android") {
+            const requestToken = extractAadhaarTokenFromUrl(targetUrl);
+            if (requestToken && OvseModule?.launchAadhaarApp) {
+               await OvseModule.launchAadhaarApp(requestToken);
+               return;
+            }
+         }
+
+         await Linking.openURL(targetUrl);
+      } catch (error) {
+         console.log("Failed to open external redirect:", targetUrl, error);
+         setLoadingError("Unable to open Aadhaar app from WebView.");
+      }
+   };
+
+   const handleShouldStartLoadWithRequest = (request: { url?: string }) => {
+      const targetUrl = request?.url || "";
+
+      const isExternalAppRedirect = /^intent:|^pehchaan?:\/\//i.test(targetUrl);
+
+      if (isExternalAppRedirect) {
+         void openExternalRedirect(targetUrl);
+         return false;
+      }
+
+      return true;
+   };
 
    const handleWebViewPress = () => {
       setSelectedMode("webview");
@@ -220,6 +346,8 @@ export default function HomeScreen() {
                            allowUniversalAccessFromFileURLs={true}
                            allowFileAccessFromFileURLs={true}
                            setSupportMultipleWindows={false}
+                           injectedJavaScriptBeforeContentLoaded={webIntentBridgeScript}
+                           onShouldStartLoadWithRequest={handleShouldStartLoadWithRequest}
                            onLoadStart={() => {
                               console.log("WebView started loading:", webViewUrl);
                               setIsLoading(true);
@@ -244,7 +372,17 @@ export default function HomeScreen() {
                               setIsLoading(false);
                            }}
                            onMessage={(event) => {
-                              console.log("Message from WebView:", event.nativeEvent.data);
+                              const message = event.nativeEvent.data;
+                              console.log("Message from WebView:", message);
+
+                              try {
+                                 const parsed = JSON.parse(message);
+                                 if (parsed?.type === "external_redirect" && typeof parsed?.url === "string") {
+                                    void openExternalRedirect(parsed.url);
+                                 }
+                              } catch {
+                                 // Ignore non-JSON messages from sites that use postMessage for their own events.
+                              }
                            }}
                            renderError={(errorName) => (
                               <View style={styles.errorView}>

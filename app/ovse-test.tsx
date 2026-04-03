@@ -27,6 +27,7 @@ import {
    ActivityIndicator,
    Alert,
    AppState,
+   DeviceEventEmitter,
    Image,
    KeyboardAvoidingView,
    Linking,
@@ -56,9 +57,132 @@ interface OVSERuntime {
    scanUri: string; // For launching Aadhaar app
 }
 
+const extractXmlTagValue = (xmlPayload: string, tagName: string): string => {
+   const tagRegex = new RegExp(`<${tagName}>([\\s\\S]*?)<\\/${tagName}>`, "i");
+   const match = xmlPayload.match(tagRegex);
+   return match?.[1]?.trim() || "";
+};
+
+const buildCallbackXmlPayload = (xmlCandidates: string[], transactionId: string, rawPayload: string): string | null => {
+   // 1. Look for <Credential> tag inside any XML candidate
+   for (const candidate of xmlCandidates) {
+      const trimmedCandidate = candidate.trim();
+      const callbackTxnId = extractXmlTagValue(trimmedCandidate, "TxnID") || transactionId;
+      const callbackCredential = extractXmlTagValue(trimmedCandidate, "Credential");
+      if (callbackCredential) {
+         return `<Request><TxnID>${callbackTxnId}</TxnID><Credential>${callbackCredential}</Credential></Request>`;
+      }
+   }
+
+   // 2. Check JSON extras for the response payload that Aadhaar returns.
+   //    Aadhaar typically uses key "response" or "Response"; Gridlines may use "Credential".
+   //    We use the raw value from those keys directly as <Credential>.
+   try {
+      const parsed = JSON.parse(rawPayload);
+      const extras = parsed?.extras ?? {};
+
+      // Priority-ordered keys that Aadhaar / UIDAI return credentials under
+      const candidateKeys = [
+         "Credential",
+         "credential",
+         "response",
+         "Response",
+         "authResponse",
+         "authRes",
+         "authresp",
+         "data",
+         "result",
+         "payload",
+      ];
+
+      for (const key of candidateKeys) {
+         const val = extras[key];
+         if (typeof val === "string" && val.trim() && val !== "null" && val !== "undefined") {
+            return `<Request><TxnID>${transactionId}</TxnID><Credential>${val.trim()}</Credential></Request>`;
+         }
+      }
+
+      // Fallback: any extra value long enough to be a real credential (not a short status code)
+      for (const [key, val] of Object.entries(extras)) {
+         if (key === "resultCode" || key === "resultcode") continue;
+         if (typeof val === "string" && val.trim().length > 30) {
+            return `<Request><TxnID>${transactionId}</TxnID><Credential>${val.trim()}</Credential></Request>`;
+         }
+      }
+   } catch {
+      // rawPayload is not JSON
+   }
+
+   return null;
+};
+
+const extractXmlCandidates = (payload: string): string[] => {
+   const candidates = new Set<string>();
+
+   if (!payload) {
+      return [];
+   }
+
+   if (payload.includes("<") && payload.includes(">")) {
+      candidates.add(payload);
+   }
+
+   try {
+      const parsed = JSON.parse(payload);
+      const walk = (value: unknown) => {
+         if (typeof value === "string") {
+            if (value.includes("<") && value.includes(">")) {
+               candidates.add(value);
+            }
+            return;
+         }
+
+         if (Array.isArray(value)) {
+            value.forEach(walk);
+            return;
+         }
+
+         if (value && typeof value === "object") {
+            Object.values(value).forEach(walk);
+         }
+      };
+
+      walk(parsed);
+   } catch {
+      // Raw string payload only.
+   }
+
+   return [...candidates];
+};
+
+const summarizeXmlPayload = (xmlPayload: string): string[] => {
+   const summaries: string[] = [];
+   const trimmedXml = xmlPayload.trim();
+   const tagRegex = /<([A-Za-z0-9_:-]+)>([^<]{1,200})<\/\1>/g;
+   let match: RegExpExecArray | null;
+
+   while ((match = tagRegex.exec(trimmedXml)) !== null && summaries.length < 8) {
+      const [, tagName, tagValue] = match;
+      const cleanValue = tagValue.trim();
+      if (cleanValue) {
+         summaries.push(`${tagName}: ${cleanValue}`);
+      }
+   }
+
+   if (summaries.length === 0) {
+      summaries.push(`XML payload detected (${trimmedXml.substring(0, 180)}...)`);
+   }
+
+   return summaries;
+};
+
 // API Service for OVSE Integration
 class OVSEAPIService {
    private static BASE_URL = "https://api-dev.gridlines.io/uidai-api/ovse";
+
+   static getDefaultCallbackUrl() {
+      return `${this.BASE_URL}/callback`;
+   }
 
    private static async parseResponse(response: Response) {
       const text = await response.text();
@@ -78,16 +202,36 @@ class OVSEAPIService {
     * For Android: package name and SHA-256 certificate fingerprint
     * For iOS: bundle identifier and Team ID (or leave empty as not required by UIDAI)
     */
-   private static getAppIdentifiers() {
+   private static async getAppIdentifiers() {
       if (Platform.OS === "android") {
+         let runtimeSignature = "";
+         let runtimePackageId = "";
+
+         try {
+            if (OvseModule?.getAppSignatureBase64) {
+               runtimeSignature = await OvseModule.getAppSignatureBase64();
+               console.log("[OVSE] Android runtime app_signature (Base64 SHA-256):", runtimeSignature);
+            }
+         } catch (error) {
+            console.warn("[OVSE] Failed to fetch runtime Android signature, using fallback:", error);
+         }
+
+         try {
+            if (OvseModule?.getAppPackageId) {
+               runtimePackageId = await OvseModule.getAppPackageId();
+               console.log("[OVSE] Android runtime app_package_id:", runtimePackageId);
+            }
+         } catch (error) {
+            console.warn("[OVSE] Failed to fetch runtime Android package id, using fallback:", error);
+         }
+
          // Android: Package name and SHA-256 certificate fingerprint
-         // Package set in app.json: "in.ongrid.lav"
-         // SHA-256 from debug keystore
+         // Package must match the installed app's applicationId
+         // app_signature must be Base64(SHA-256(cert bytes))
          return {
-            app_package_id: "in.ongrid.lav", // Registered with UIDAI
-            // asig must be Base64 of the raw SHA-256 certificate bytes (NOT colon-hex fingerprint)
-            // Derived from: SHA-256 FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C
-            app_signature: "+sYXRdwJA3hvue3mKpYrOZ9zSPC7b4mbgzJmdZEDO5w=", // Base64(SHA-256 bytes) - what UIDAI/Aadhaar verifies
+            app_package_id: runtimePackageId || "in.ongrid.lav",
+            // Fallback value retained for safety if native retrieval fails
+            app_signature: runtimeSignature || "+sYXRdwJA3hvue3mKpYrOZ9zSPC7b4mbgzJmdZEDO5w=",
          };
       } else {
          // iOS: MUST match actual Bundle ID in Xcode
@@ -105,7 +249,7 @@ class OVSEAPIService {
     * Channel: APP (for mobile app-to-app), WEB (for browser redirect)
     */
    static async generateToken(apiKey: string, channelType: "APP" | "WEB" = "APP") {
-      const { app_package_id, app_signature } = this.getAppIdentifiers();
+      const { app_package_id, app_signature } = await this.getAppIdentifiers();
 
       const body: any = {
          channel_type: channelType,
@@ -177,6 +321,36 @@ class OVSEAPIService {
       });
       return this.parseResponse(response);
    }
+
+   static async sendCallback(apiKey: string, callbackXml: string, callbackUrl?: string) {
+      const targetUrl = callbackUrl || `${this.BASE_URL}/callback`;
+      const response = await fetch(targetUrl, {
+         method: "POST",
+         headers: {
+            "Content-Type": "application/xml",
+            Accept: "application/json, application/xml, text/plain, */*",
+            "X-API-Key": apiKey,
+            "X-Auth-Type": "Api-Key",
+            "X-GLN-Source": "API",
+         },
+         body: callbackXml,
+      });
+
+      const responseText = await response.text();
+      if (!response.ok) {
+         throw new Error(`Callback API failed (${response.status}): ${responseText.substring(0, 200)}`);
+      }
+
+      if (!responseText.trim()) {
+         return { status: response.status, data: null };
+      }
+
+      try {
+         return JSON.parse(responseText);
+      } catch {
+         return { status: response.status, data: responseText };
+      }
+   }
 }
 
 export default function OVSETestScreen() {
@@ -193,6 +367,13 @@ export default function OVSETestScreen() {
    const [autoScrollLogs, setAutoScrollLogs] = useState(true);
    const debugScrollRef = useRef<ScrollView>(null);
    const autoScrollLogsRef = useRef(true);
+   const sessionDataRef = useRef<any>(null);
+   const pollingActiveRef = useRef(false);
+   const lastIntentPayloadRef = useRef<string>("");
+   const callbackPostedPayloadsRef = useRef<Set<string>>(new Set());
+   const awaitingAadhaarReturnRef = useRef(false);
+   // Holds the processIntentResponse function so AppState handler can call it
+   const processIntentResponseRef = useRef<((source: string, payload?: string | null) => Promise<void>) | null>(null);
 
    // Refs for polling control
    const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -201,6 +382,14 @@ export default function OVSETestScreen() {
    useEffect(() => {
       autoScrollLogsRef.current = autoScrollLogs;
    }, [autoScrollLogs]);
+
+   useEffect(() => {
+      sessionDataRef.current = sessionData;
+   }, [sessionData]);
+
+   useEffect(() => {
+      pollingActiveRef.current = pollingActive;
+   }, [pollingActive]);
 
    // Debug logger function
    const addLog = (type: "INFO" | "SUCCESS" | "ERROR" | "API" | "METHOD", message: string) => {
@@ -279,6 +468,42 @@ export default function OVSETestScreen() {
                pollOnce(runtime.apiKey, runtime.transactionId);
                startPolling(runtime.apiKey, runtime.transactionId);
             }
+
+            // Check native pending return payload when coming back from Aadhaar app.
+            // onActivityResult / onNewIntent may fire slightly after AppState, so we retry.
+            if (awaitingAadhaarReturnRef.current && OvseModule?.getPendingIntentResponse) {
+               let foundPayload = false;
+               for (let attempt = 0; attempt < 6; attempt++) {
+                  // Small delay on first retry so native side can finish processing
+                  if (attempt > 0) {
+                     await new Promise((r) => setTimeout(r, 600));
+                  }
+                  try {
+                     const pendingPayload = await OvseModule.getPendingIntentResponse();
+                     if (pendingPayload && pendingPayload !== lastIntentPayloadRef.current) {
+                        addLog("METHOD", `📥 Aadhaar return payload found (attempt ${attempt + 1}) via AppState retry`);
+                        await processIntentResponseRef.current?.("appstate-retry", pendingPayload);
+                        if (OvseModule?.clearPendingIntentResponse) {
+                           await OvseModule.clearPendingIntentResponse();
+                        }
+                        foundPayload = true;
+                        break;
+                     }
+                  } catch (error: any) {
+                     addLog(
+                        "ERROR",
+                        `Pending intent check (attempt ${attempt + 1}) failed: ${error?.message || error}`,
+                     );
+                     break;
+                  }
+               }
+               if (!foundPayload) {
+                  addLog(
+                     "INFO",
+                     "Aadhaar return payload not found after retries (DeviceEventEmitter may still deliver it)",
+                  );
+               }
+            }
          }
 
          appStateRef.current = nextAppState;
@@ -313,6 +538,136 @@ export default function OVSETestScreen() {
       };
 
       restoreOnMount();
+   }, []);
+
+   // Handle Aadhaar app return intents for APP-to-APP flow.
+   useEffect(() => {
+      if (Platform.OS !== "android") {
+         return;
+      }
+
+      const processIntentResponse = async (source: string, payload?: string | null) => {
+         if (!payload) {
+            return;
+         }
+         if (lastIntentPayloadRef.current === payload) {
+            return;
+         }
+
+         lastIntentPayloadRef.current = payload;
+
+         addLog("METHOD", `📥 Aadhaar return intent received (${source})`);
+         // Log full raw payload - truncate only if very long
+         addLog("INFO", `RAW payload (${payload.length} chars): ${payload.substring(0, 400)}`);
+
+         try {
+            const parsedPayload = JSON.parse(payload);
+            const action = parsedPayload?.action || "(none)";
+            const data = parsedPayload?.data || "(none)";
+            const extras = parsedPayload?.extras || {};
+            const extraKeys = Object.keys(extras);
+
+            addLog("INFO", `Intent action: ${action}`);
+            addLog("INFO", `Intent data: ${String(data).substring(0, 200)}`);
+
+            if (extraKeys.length === 0) {
+               addLog("ERROR", "⚠️ Intent extras is EMPTY - Aadhaar returned no data");
+            } else {
+               addLog("INFO", `Intent extras keys (${extraKeys.length}): ${extraKeys.join(", ")}`);
+               // Log every extra value in full
+               for (const key of extraKeys) {
+                  const val = String(extras[key] ?? "");
+                  addLog("INFO", `  extra[${key}] = ${val.substring(0, 300)}`);
+               }
+            }
+         } catch {
+            addLog("INFO", "Intent payload is not JSON - treating as raw string");
+         }
+
+         const xmlCandidates = extractXmlCandidates(payload);
+         if (xmlCandidates.length > 0) {
+            addLog(
+               "SUCCESS",
+               `XML payload detected in intent (${xmlCandidates.length} candidate${xmlCandidates.length > 1 ? "s" : ""})`,
+            );
+            summarizeXmlPayload(xmlCandidates[0]).forEach((line) => addLog("INFO", line));
+         }
+
+         setStatus("Returned from Aadhaar app. Verifying status...");
+
+         const activeSession = sessionDataRef.current;
+         if (!activeSession?.apiKey || !activeSession?.transactionId) {
+            addLog("ERROR", "No active session available to verify Aadhaar return intent");
+            return;
+         }
+
+         const callbackXml = buildCallbackXmlPayload(xmlCandidates, activeSession.transactionId, payload);
+         if (callbackXml) {
+            if (!callbackPostedPayloadsRef.current.has(payload)) {
+               try {
+                  addLog(
+                     "API",
+                     `📤 Posting Aadhaar callback XML to ${activeSession.callbackUrl || "default /callback"}`,
+                  );
+                  addLog("INFO", `Callback XML: ${callbackXml.substring(0, 220)}...`);
+                  const callbackResponse = await OVSEAPIService.sendCallback(
+                     activeSession.apiKey,
+                     callbackXml,
+                     activeSession.callbackUrl,
+                  );
+                  callbackPostedPayloadsRef.current.add(payload);
+                  addLog(
+                     "SUCCESS",
+                     `✅ Callback API accepted (${JSON.stringify(callbackResponse).substring(0, 140)}...)`,
+                  );
+               } catch (error: any) {
+                  addLog("ERROR", `Callback API failed: ${error?.message || error}`);
+               }
+            }
+         } else {
+            addLog("ERROR", "No Credential XML found in Aadhaar return intent; callback API not sent");
+         }
+
+         awaitingAadhaarReturnRef.current = false;
+
+         await pollOnce(activeSession.apiKey, activeSession.transactionId);
+
+         if (!pollingActiveRef.current) {
+            startPolling(activeSession.apiKey, activeSession.transactionId);
+         }
+      };
+
+      // Expose to AppState handler so it can process pending payload retries.
+      processIntentResponseRef.current = processIntentResponse;
+
+      const intentSubscription = DeviceEventEmitter.addListener("OVSE_INTENT_RESPONSE", (event: any) => {
+         void processIntentResponse("event", event?.payload);
+      });
+
+      const checkPendingIntent = async () => {
+         try {
+            if (!OvseModule?.getPendingIntentResponse) {
+               return;
+            }
+
+            const pendingPayload = await OvseModule.getPendingIntentResponse();
+            if (pendingPayload) {
+               await processIntentResponse("pending", pendingPayload);
+               if (OvseModule?.clearPendingIntentResponse) {
+                  await OvseModule.clearPendingIntentResponse();
+               }
+            }
+         } catch (error: any) {
+            addLog("ERROR", `Failed to read pending Aadhaar intent: ${error?.message || error}`);
+         }
+      };
+
+      void checkPendingIntent();
+
+      return () => {
+         processIntentResponseRef.current = null;
+         intentSubscription.remove();
+      };
    }, []);
 
    const handleSubmit = async () => {
@@ -356,6 +711,8 @@ export default function OVSETestScreen() {
             );
          }
 
+         let callbackUrl = OVSEAPIService.getDefaultCallbackUrl();
+
          // Decode JWT to verify backend configuration
          addLog("INFO", "🔍 Decoding JWT token...");
          console.log("\n=== JWT VERIFICATION ===");
@@ -381,6 +738,9 @@ export default function OVSETestScreen() {
                addLog("INFO", `JWT sa (Reg#): ${payload.sa}`);
                addLog("INFO", `JWT channel: ${payload.ch}`);
                addLog("INFO", `JWT callback: ${payload.cb}`);
+               if (typeof payload.cb === "string" && payload.cb.trim()) {
+                  callbackUrl = payload.cb.trim();
+               }
                console.log("\n=== CRITICAL FIELDS ===");
                console.log("aid (app_package_id):", payload.aid);
                console.log("asig (app_signature):", payload.asig);
@@ -390,16 +750,18 @@ export default function OVSETestScreen() {
                console.log("cb (callback URL):", payload.cb);
                console.log("aud (audience):", payload.aud);
 
-               // Check if Bundle ID matches what we're sending
-               if (payload.aid && payload.aid !== "in.ongrid.lav") {
-                  addLog("ERROR", `⚠️ Bundle ID mismatch! JWT: ${payload.aid}, Expected: in.ongrid.lav`);
-                  console.log("⚠️ WARNING: Bundle ID mismatch!");
-                  console.log("  JWT aid:", payload.aid);
-                  console.log("  Expected: in.ongrid.lav");
-                  Alert.alert(
-                     "❌ Bundle ID Mismatch",
-                     `The app is sending Bundle ID:\n"${payload.aid}"\n\nBut you changed Xcode to:\n"in.ongrid.lav"\n\nYou need to:\n1. Clean Build (Product → Clean)\n2. Delete app from iPhone\n3. Rebuild and reinstall`,
-                  );
+               // Compare with actual runtime package on Android (or configured bundle id on iOS)
+               try {
+                  let expectedAppId = "in.ongrid.lav";
+                  if (Platform.OS === "android" && OvseModule?.getAppPackageId) {
+                     expectedAppId = await OvseModule.getAppPackageId();
+                  }
+
+                  if (payload.aid && payload.aid !== expectedAppId) {
+                     addLog("ERROR", `⚠️ App ID mismatch! JWT aid: ${payload.aid}, runtime: ${expectedAppId}`);
+                  }
+               } catch (e) {
+                  console.warn("Failed to validate runtime app id", e);
                }
 
                console.log("========================\n");
@@ -413,6 +775,7 @@ export default function OVSETestScreen() {
             apiKey,
             transactionId: transaction_id,
             scanUri: intentToken,
+            callbackUrl,
          });
 
          // Save runtime for app state restoration
@@ -483,6 +846,7 @@ export default function OVSETestScreen() {
                   addLog("SUCCESS", "✅ Aadhaar app launched (Android)");
                   console.log(`✅ Aadhaar app launched successfully`);
                   setStatus("Aadhaar app launched. Complete verification there...");
+                  awaitingAadhaarReturnRef.current = true;
                } catch (err: any) {
                   addLog("ERROR", `Launch failed: ${err.message}`);
                   console.log(`Failed to launch:`, err);
@@ -530,19 +894,33 @@ export default function OVSETestScreen() {
          const statusResponse = await OVSEAPIService.checkStatus(apiKey, transactionId);
          addLog("API", `📥 Status: ${JSON.stringify(statusResponse).substring(0, 150)}...`);
          console.log("Immediate poll result:", statusResponse);
+         addLog(
+            "INFO",
+            `Immediate status code=${statusResponse?.data?.code ?? "(none)"}, message=${statusResponse?.data?.message ?? "(none)"}`,
+         );
 
          // New API returns code 1001 for callback received
          if (statusResponse?.data?.code === "1001" || statusResponse?.data?.code === 1001) {
             addLog("SUCCESS", "🎉 Verification Complete! Code: 1001");
+            const ovseData = statusResponse?.data?.ovse_data || statusResponse?.data || null;
+            if (ovseData && typeof ovseData === "object") {
+               addLog("INFO", `OVSE result fields: ${Object.keys(ovseData).join(", ")}`);
+               addLog("INFO", `OVSE result preview: ${JSON.stringify(ovseData).substring(0, 260)}...`);
+            }
             stopPolling();
             await clearRuntime();
             setStatus(`✅ Verification Complete!`);
-            setOvseResult(statusResponse.data.ovse_data);
-            setShowResultModal(true);
+            if (ovseData) {
+               setOvseResult(ovseData);
+               setShowResultModal(true);
+            } else {
+               addLog("ERROR", "Status is success but result payload is empty; modal not opened");
+            }
          } else {
             setStatus(`Status: ${statusResponse?.data?.message || "Waiting for verification..."}`);
          }
       } catch (error: any) {
+         addLog("ERROR", `Immediate status check failed: ${error?.message || error}`);
          console.error("Poll error:", error);
       }
    };
@@ -572,20 +950,31 @@ export default function OVSETestScreen() {
                `📥 Poll ${attempts}: Code ${statusResponse?.data?.code}, Msg: ${statusResponse?.data?.message}`,
             );
             console.log(`Poll ${attempts}/${maxAttempts}:`, statusResponse);
+            addLog("INFO", `Poll ${attempts} raw status: ${JSON.stringify(statusResponse).substring(0, 220)}...`);
 
             // Check for callback received (code 1001)
             if (statusResponse?.data?.code === "1001" || statusResponse?.data?.code === 1001) {
                addLog("SUCCESS", "🎉 SUCCESS! Received code 1001 - Verification complete");
+               const ovseData = statusResponse?.data?.ovse_data || statusResponse?.data || null;
+               if (ovseData && typeof ovseData === "object") {
+                  addLog("INFO", `OVSE result fields: ${Object.keys(ovseData).join(", ")}`);
+                  addLog("INFO", `OVSE result preview: ${JSON.stringify(ovseData).substring(0, 260)}...`);
+               }
                stopPolling();
                await clearRuntime();
                setStatus(`✅ Verification Complete!`);
-               setOvseResult(statusResponse.data.ovse_data);
-               setShowResultModal(true);
+               if (ovseData) {
+                  setOvseResult(ovseData);
+                  setShowResultModal(true);
+               } else {
+                  addLog("ERROR", "Status is success but result payload is empty; modal not opened");
+               }
             } else {
                // Still waiting (code 1000 or other)
                setStatus(`Polling (${attempts}/${maxAttempts})... ${statusResponse.data?.message || "Waiting..."}`);
             }
          } catch (error: any) {
+            addLog("ERROR", `Poll ${attempts} failed: ${error?.message || error}`);
             console.error(`Poll ${attempts} error:`, error);
          }
 
@@ -761,11 +1150,16 @@ export default function OVSETestScreen() {
             visible={showResultModal}
             animationType="slide"
             transparent={true}
+            statusBarTranslucent={true}
             onRequestClose={() => setShowResultModal(false)}
          >
             <View style={styles.modalOverlay}>
                <View style={styles.modalContainer}>
-                  <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
+                  <ScrollView
+                     style={styles.modalScroll}
+                     contentContainerStyle={styles.modalScrollContent}
+                     showsVerticalScrollIndicator={false}
+                  >
                      {/* Header */}
                      <View style={styles.modalHeader}>
                         <Text style={styles.modalTitle}>✅ Verification Successful</Text>
@@ -774,7 +1168,7 @@ export default function OVSETestScreen() {
                         </TouchableOpacity>
                      </View>
 
-                     {ovseResult && (
+                     {ovseResult ? (
                         <>
                            {/* Resident Photo */}
                            {ovseResult.resident_image && (
@@ -858,6 +1252,14 @@ export default function OVSETestScreen() {
                               />
                            </View>
                         </>
+                     ) : (
+                        <View style={styles.emptyResultContainer}>
+                           <Text style={styles.emptyResultTitle}>Result Ready</Text>
+                           <Text style={styles.emptyResultText}>
+                              Verification succeeded, but detailed fields were not present in `ovse_data`.
+                           </Text>
+                           <Text style={styles.emptyResultText}>Please check Debug Logs for full status payload.</Text>
+                        </View>
                      )}
 
                      {/* Close Button */}
@@ -873,10 +1275,12 @@ export default function OVSETestScreen() {
 }
 
 // Helper component for displaying result rows
-const ResultRow = ({ label, value, multiline = false }: { label: string; value: string; multiline?: boolean }) => (
+const ResultRow = ({ label, value, multiline = false }: { label: string; value: unknown; multiline?: boolean }) => (
    <View style={styles.resultRow}>
       <Text style={styles.resultLabel}>{label}:</Text>
-      <Text style={[styles.resultValue, multiline && styles.resultValueMultiline]}>{value || "N/A"}</Text>
+      <Text style={[styles.resultValue, multiline && styles.resultValueMultiline]}>
+         {value != null ? String(value) : "N/A"}
+      </Text>
    </View>
 );
 
@@ -1057,6 +1461,7 @@ const styles = StyleSheet.create({
    modalContainer: {
       width: "90%",
       maxHeight: "85%",
+      minHeight: 280,
       backgroundColor: "#ffffff",
       borderRadius: 20,
       overflow: "hidden",
@@ -1067,7 +1472,10 @@ const styles = StyleSheet.create({
       shadowRadius: 20,
    },
    modalScroll: {
-      flex: 1,
+      width: "100%",
+   },
+   modalScrollContent: {
+      paddingBottom: 12,
    },
    modalHeader: {
       flexDirection: "row",
@@ -1155,6 +1563,23 @@ const styles = StyleSheet.create({
       color: "#fff",
       fontSize: 16,
       fontWeight: "bold",
+   },
+   emptyResultContainer: {
+      paddingHorizontal: 20,
+      paddingTop: 24,
+      paddingBottom: 8,
+   },
+   emptyResultTitle: {
+      fontSize: 20,
+      fontWeight: "700",
+      color: "#212529",
+      marginBottom: 10,
+   },
+   emptyResultText: {
+      fontSize: 14,
+      lineHeight: 20,
+      color: "#495057",
+      marginBottom: 8,
    },
    // Debug Panel Styles
    debugPanel: {

@@ -1,8 +1,8 @@
 # Aadhaar OVSE Complete Project Documentation
 
 **Project**: Aadhaar OVSE (Online Verification with Selective Disclosure) Integration  
-**Last Updated**: March 31, 2026  
-**Status**: ✅ iOS/Android Native + SDK Productization (RN/iOS complete, Android AAR pending local Gradle)
+**Last Updated**: April 3, 2026  
+**Status**: ✅ iOS/Android Native + SDK Productization + App-to-App Callback Return Pipeline Verified
 
 ---
 
@@ -23,6 +23,7 @@
 13.   [Troubleshooting](#13-troubleshooting)
 14.   [File Structure](#14-file-structure)
 15.   [SDK Productization Update (March 31, 2026)](#15-sdk-productization-update-march-31-2026)
+16.   [Callback Pipeline Update (April 3, 2026)](#16-callback-pipeline-update-april-3-2026)
 
 ---
 
@@ -2891,10 +2892,159 @@ For Android APP-mode OVSE in latest flow:
 
 ---
 
-**Document Version**: 2.1  
-**Last Updated**: March 31, 2026  
+## 16. Callback Pipeline Update (April 3, 2026)
+
+### 16.1 Exact Changes That Made Callback Work
+
+This section documents the exact fixes that made callback posting and end-to-end status progression work.
+
+1. Runtime Android app signature extraction (fixed signature mismatch risk)
+   - File: `android/app/src/main/java/in/ongrid/lav/OvseModule.kt`
+   - Added `getAppSignatureBase64()` to compute Base64(SHA-256(cert bytes)) from the installed APK certificate.
+   - File: `app/ovse-test.tsx`
+   - Updated `getAppIdentifiers()` to use runtime signature from native module.
+
+2. WebView to Aadhaar handoff reliability
+   - File: `app/(tabs)/index.tsx`
+   - Added URL token parser for `intent:`, `pehchan://`, `pehchaan://`, and URL query variants (`req`, `value`).
+   - Added injected WebView bridge script intercepting:
+      - `window.open`
+      - `location.assign`
+      - `location.replace`
+      - anchor clicks
+   - Routed bridge messages to native launch on Android.
+
+3. Native return-intent capture pipeline
+   - File: `android/app/src/main/java/in/ongrid/lav/MainActivity.kt`
+   - Added handling in both `onCreate()` and `onNewIntent()`.
+   - Added `onActivityResult()` support for `startActivityForResult` path.
+   - Critical fix: if `onActivityResult` arrives with `data=null` and a payload was already cached by `onNewIntent`, re-emit cached payload instead of overwriting with empty synthetic payload.
+
+4. Native payload caching and re-emit controls
+   - File: `android/app/src/main/java/in/ongrid/lav/OvseModule.kt`
+   - Added cached pending payload flow and JS event emission (`OVSE_INTENT_RESPONSE`).
+   - Added helpers to avoid data-loss race:
+      - `hasPendingResponse()`
+      - `reEmitIfPending()`
+
+5. Android manifest return-action filters
+   - File: `android/app/src/main/AndroidManifest.xml`
+   - Added intent filters for:
+      - `in.gov.uidai.pehchaan.INTENT_RESPONSE`
+      - `in.gov.uidai.pehchaan.WEB_INTENT_RESPONSE`
+
+6. Callback payload builder expanded for real Aadhaar keys
+   - File: `app/ovse-test.tsx`
+   - `buildCallbackXmlPayload()` now checks keys returned in real devices:
+      - `response` / `Response`
+      - `Credential` / `credential`
+      - `authResponse`, `authRes`, `authresp`
+      - `data`, `result`, `payload`
+   - Added fallback to detect meaningful long extra values when key names vary.
+
+7. Callback API auth/headers alignment
+   - File: `app/ovse-test.tsx`
+   - `sendCallback()` headers include:
+      - `X-API-Key`
+      - `X-Auth-Type: Api-Key`
+      - `X-GLN-Source: API`
+      - `Content-Type: application/xml`
+
+8. AppState race mitigation + retry
+   - File: `app/ovse-test.tsx`
+   - Added foreground retry loop (6 attempts with delay) to fetch pending payload after returning from Aadhaar.
+   - Added `processIntentResponseRef` so AppState handler can process pending payload reliably.
+
+9. Full payload logging for diagnostics
+   - File: `app/ovse-test.tsx`
+   - Logs now include:
+      - raw payload snippet with size
+      - intent action
+      - extras keys
+      - each extra value (`extra[key] = value`)
+      - callback XML preview
+
+10.   Status API visibility in UI logs (latest)
+
+- File: `app/ovse-test.tsx`
+- Added explicit UI log lines for every status call:
+   - immediate status code/message
+   - poll raw status snippet
+   - success payload field list + preview when code `1001` appears
+   - polling errors (previously swallowed in catch)
+
+### 16.2 What Aadhaar App Returns Exactly
+
+Observed payload shape from production testing:
+
+```json
+{
+   "action": "in.gov.uidai.pehchaan.INTENT_RESPONSE",
+   "data": "",
+   "extras": {
+      "status": "SUCCESS",
+      "response": "eyJ...",
+      "timestamp": "1775192408251"
+   }
+}
+```
+
+Notes:
+
+- `action` confirms return channel from Aadhaar app.
+- `extras.status` indicates success/failure status.
+- `extras.response` contains the credential payload token/string used for callback body construction.
+- `extras.timestamp` is Aadhaar-side event timestamp.
+
+### 16.3 How We Send Aadhaar Return To Callback API
+
+1. Receive return payload via Android intent.
+2. Parse JSON payload and extract credential source from extras.
+3. Build XML body in required shape:
+
+```xml
+<Request>
+  <TxnID>{transaction_id}</TxnID>
+  <Credential>{credential_from_aadhaar_response}</Credential>
+</Request>
+```
+
+4. Determine callback URL:
+   - First choice: `cb` field from decoded JWT generated by `generate-token`.
+   - Fallback: `/ovse/callback` default endpoint.
+
+5. POST XML to callback endpoint with required headers.
+6. Continue polling `/status` until terminal code is received.
+
+### 16.4 Current Result Observed In Logs
+
+Observed in recent run:
+
+1. Aadhaar app launched successfully.
+2. Return payload captured in app logs:
+   - action: `in.gov.uidai.pehchaan.INTENT_RESPONSE`
+   - extras keys: `status`, `response`, `timestamp`
+3. Callback XML posted from app.
+4. Callback API accepted with success response (`status: 200`).
+5. Polling logs show interim state like code `1002` (callback not yet processed by status pipeline) followed by progression once backend state updates.
+
+### 16.5 Flow Coverage Summary (All Implemented)
+
+1. APP flow (direct native app-to-app launch): complete
+2. Android WebView flow (web token redirects to native Aadhaar launch): complete
+3. Aadhaar return intent capture and callback posting from host app: complete
+4. Status polling + in-app debug logs + result modal rendering: complete
+
+### 16.6 Remaining Integration Note
+
+If callback is accepted but status remains in non-terminal code for too long, this usually indicates backend ingestion latency or callback-to-status propagation delay, not mobile launch failure. Mobile now logs all key payloads to prove callback posting happened.
+
+---
+
+**Document Version**: 2.2  
+**Last Updated**: April 3, 2026  
 **Updated By**: Development Team  
-**Changes**: Added full SDK productization status, host samples, packaging validation results, and removed SDK README duplication.
+**Changes**: Added April callback pipeline fixes, real Aadhaar return payload structure, callback XML mapping, status-log UI visibility updates, and verified result timeline.
 
 ---
 
