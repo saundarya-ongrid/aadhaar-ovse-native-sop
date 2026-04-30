@@ -12,12 +12,16 @@
          "supportsTablet": true,
          "infoPlist": {
             "LSApplicationQueriesSchemes": ["pehchan", "pehchan", "pehchan", "pehchan"],
-            "ITSAppUsesNonExemptEncryption": false
+            "ITSAppUsesNonExemptEncryption": false,
+            "NSCameraUsageDescription": "This app needs camera access for Aadhaar verification in WebView.",
+            "NSMicrophoneUsageDescription": "This app needs microphone access for Aadhaar verification in WebView.",
+            "NSLocationWhenInUseUsageDescription": "This app needs location access for Aadhaar verification in WebView."
          },
          "bundleIdentifier": "com.anonymous.aadhaar-ovse-sop"
       },
       "android": {
          "package": "in.ongrid.lav",
+         "permissions": ["CAMERA", "RECORD_AUDIO", "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"],
          "adaptiveIcon": {
             "backgroundColor": "#E6F4FE",
             "foregroundImage": "./assets/images/android-icon-foreground.png",

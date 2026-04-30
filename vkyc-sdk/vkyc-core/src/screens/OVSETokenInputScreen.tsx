@@ -126,7 +126,7 @@ const OVSETokenInputScreen: React.FC = () => {
                      autoCapitalize="none"
                      autoCorrect={false}
                      editable={!isSubmitting}
-                  />
+                  /> 
                </View>
 
                {isSubmitting ? (

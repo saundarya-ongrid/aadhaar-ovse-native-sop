@@ -3,6 +3,7 @@ import { router } from "expo-router";
 import React, { useRef, useState } from "react";
 import {
    ActivityIndicator,
+   Alert,
    Dimensions,
    KeyboardAvoidingView,
    Linking,
@@ -53,6 +54,17 @@ const extractAadhaarTokenFromUrl = (targetUrl: string): string => {
 
 const webIntentBridgeScript = `
 (function () {
+   var createPermissionStatus = function (name, state) {
+      return {
+         state: state,
+         name: name,
+         onchange: null,
+         addEventListener: function () {},
+         removeEventListener: function () {},
+         dispatchEvent: function () { return false; }
+      };
+   };
+
    var isAadhaarRedirect = function (u) {
       return /^intent:/i.test(u) || /^pehchaan?:\/\//i.test(u);
    };
@@ -109,6 +121,57 @@ const webIntentBridgeScript = `
          postRedirect(href);
       }
    }, true);
+
+   if (navigator.permissions && navigator.permissions.query) {
+      var originalPermissionsQuery = navigator.permissions.query.bind(navigator.permissions);
+      navigator.permissions.query = function (descriptor) {
+         try {
+            var permissionName = descriptor && descriptor.name ? String(descriptor.name) : '';
+            if (permissionName === 'camera') {
+               return Promise.resolve(createPermissionStatus(permissionName, 'granted'));
+            }
+            if (permissionName === 'microphone') {
+               return Promise.resolve(createPermissionStatus(permissionName, 'granted'));
+            }
+         } catch (e) {}
+         return originalPermissionsQuery(descriptor);
+      };
+   }
+
+   // Camera diagnostics: bubble exact media errors to React Native.
+   if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      var originalGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = function (constraints) {
+         return originalGetUserMedia(constraints).catch(function (error) {
+            var errorName = error && error.name ? String(error.name) : 'UnknownError';
+            var errorMessage = error && error.message ? String(error.message) : 'Unknown media error';
+
+            try {
+               window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({
+                  type: 'media_error',
+                  name: errorName,
+                  message: errorMessage,
+                  constraints: constraints || null,
+               }));
+            } catch (e) {}
+            throw error;
+         });
+      };
+
+      if (navigator.getUserMedia) {
+         var legacyGetUserMedia = navigator.getUserMedia.bind(navigator);
+         navigator.getUserMedia = function (constraints, success, failure) {
+            return legacyGetUserMedia(constraints, success, failure);
+         };
+      }
+
+      if (navigator.webkitGetUserMedia) {
+         var legacyWebkitGetUserMedia = navigator.webkitGetUserMedia.bind(navigator);
+         navigator.webkitGetUserMedia = function (constraints, success, failure) {
+            return legacyWebkitGetUserMedia(constraints, success, failure);
+         };
+      }
+   }
 })();
 true;
 `;
@@ -160,7 +223,7 @@ export default function HomeScreen() {
       router.push("/ovse-test" as any);
    };
 
-   const handleGoPress = () => {
+   const handleGoPress = async () => {
       let formattedUrl = url.trim();
       if (formattedUrl && !formattedUrl.startsWith("http://") && !formattedUrl.startsWith("https://")) {
          formattedUrl = "https://" + formattedUrl;
@@ -294,9 +357,16 @@ export default function HomeScreen() {
                         autoCorrect={false}
                         keyboardType="url"
                         returnKeyType="go"
-                        onSubmitEditing={handleGoPress}
+                        onSubmitEditing={() => {
+                           void handleGoPress();
+                        }}
                      />
-                     <TouchableOpacity onPress={handleGoPress} style={styles.goButton}>
+                     <TouchableOpacity
+                        onPress={() => {
+                           void handleGoPress();
+                        }}
+                        style={styles.goButton}
+                     >
                         <Text style={styles.goButtonText}>Go</Text>
                      </TouchableOpacity>
                   </View>
@@ -337,16 +407,19 @@ export default function HomeScreen() {
                            domStorageEnabled={true}
                            allowsInlineMediaPlayback={true}
                            mediaPlaybackRequiresUserAction={false}
+                           mediaCapturePermissionGrantType="grant"
+                           geolocationEnabled={true}
                            mixedContentMode="always"
                            thirdPartyCookiesEnabled={true}
                            sharedCookiesEnabled={true}
-                           incognito={true}
                            originWhitelist={["*"]}
                            allowFileAccess={true}
                            allowUniversalAccessFromFileURLs={true}
                            allowFileAccessFromFileURLs={true}
                            setSupportMultipleWindows={false}
                            injectedJavaScriptBeforeContentLoaded={webIntentBridgeScript}
+                           injectedJavaScriptBeforeContentLoadedForMainFrameOnly={false}
+                           injectedJavaScriptForMainFrameOnly={false}
                            onShouldStartLoadWithRequest={handleShouldStartLoadWithRequest}
                            onLoadStart={() => {
                               console.log("WebView started loading:", webViewUrl);
@@ -379,6 +452,11 @@ export default function HomeScreen() {
                                  const parsed = JSON.parse(message);
                                  if (parsed?.type === "external_redirect" && typeof parsed?.url === "string") {
                                     void openExternalRedirect(parsed.url);
+                                 } else if (parsed?.type === "media_error") {
+                                    const errorName = parsed?.name || "UnknownError";
+                                    const errorMessage = parsed?.message || "Unknown media error";
+                                    setLoadingError(`Camera error (${errorName}): ${errorMessage}`);
+                                    Alert.alert("Camera Access Error", `${errorName}: ${errorMessage}`);
                                  }
                               } catch {
                                  // Ignore non-JSON messages from sites that use postMessage for their own events.
